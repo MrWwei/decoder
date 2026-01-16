@@ -67,5 +67,6 @@
         "xtkj_decoderbk4": "cpp",
         "xtkj_decoder_hard": "c",
         "bitset": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/home/ubuntu/wtwei/zlmediakit_ffmpeg"
 }

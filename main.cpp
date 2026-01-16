@@ -47,205 +47,281 @@ void run(xtkj::IDecoder* decoder, string rtsp_url, int instance_id)
     int  empty_count = 0;
     while (keep_flag) {
         count++;
-        // std::this_thread::sleep_for(
-        //     std::chrono::milliseconds(1));  // 线程休眠1ms
-        // std::cout << "out:" << decoder->get_frame() << std::endl;
         auto start = std::chrono::high_resolution_clock::now();
 
         vector<long long> mat_info = decoder->get_frame();
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
         if (mat_info.empty()) {
             empty_count++;
-            // printf("instance %d out is null; count is %d!\n", instance_id,
-            // empty_count);
-            // if(empty_count>20){
-            //     printf("%d restart open stream\n", instance_id);
-            //     decoder->stop();
-            //     // break;
-            //     this_thread::sleep_for(std::chrono::milliseconds(1000));
-            //     decoder->start(rtsp_url);
-            //     empty_count = 0;
-            //     // continue;
-            // }
             continue;
         }
 
         cv::Mat mat =
             cv::Mat(mat_info[2], mat_info[1], CV_8UC3, (cv::Mat*)mat_info[0]);
-        // cv::cvtColor(mat, mat, cv::COLOR_BGRA2BGR);
-
-        // printf("pts:%lld\n",mat_info[3]);
-        std::cout << instance_id << ":" << count << std::endl;
-        // cv::imwrite("out_frames/"+std::to_string(instance_id)+"_out_" +
-        // std::to_string(count) + ".jpg", mat);
-        // if(mat_info[0]>0)
-        // free(reinterpret_cast<void*>(mat_info[0]));
+        
+        long long pts_ms = mat_info[3];
+        double fps_val = mat_info[4] / 100.0;
+        long long bitrate_val = mat_info[5];
+        
+        // std::cout << "Instance " << instance_id 
+        //           << " - Frame #" << count 
+        //           << " - PTS: " << pts_ms << " ms"
+        //           << " - FPS: " << fps_val
+        //           << " - Bitrate: " << (bitrate_val ) << " Mbps"
+        //           << std::endl;
+        cv::imwrite("output_instance_" + std::to_string(instance_id) + "_frame_" + std::to_string(count) + ".jpg", mat);
+        if(mat_info[0] > 0)
+            free(reinterpret_cast<void*>(mat_info[0]));
+        
         auto end = std::chrono::high_resolution_clock::now();
-        // 计算时间差
         auto duration =
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
                 .count();
-        printf("代码运行时间: %d 毫秒\n", duration);
-        // if(count > 10) decoder->stop();
+        printf("Instance %d - 处理时间: %lld ms\n", instance_id, duration);
+    }
+}
 
-        // cv::imwrite("out_frames/out_" + std::to_string(count) + ".jpg",
-        // mat);
-
-        // if (count > 2) {
-        //     printf("stop---------------------!\n");
-        //     // decoder->stop();
-        //     printf("11111111111111111\n");
+// 新增：测试重连功能
+void test_reconnect(xtkj::IDecoder* decoder, string video_path, int instance_id)
+{
+    int  reconnect_count = 0;
+    int  max_reconnects  = 3;  // 最大重连次数
+    
+    while (reconnect_count < max_reconnects) {
+        printf("\n=== Instance %d - 连接测试 #%d ===\n", instance_id, reconnect_count + 1);
+        
+        // 启动解码器
+        printf("Instance %d - 启动解码器...\n", instance_id);
+        int ret = decoder->start_pull(video_path, 0);
+        // if (ret != 0) {
+        //     printf("Instance %d - 启动失败！\n", instance_id);
         //     break;
         // }
+        printf("Instance %d - 启动成功！\n", instance_id);
+        
+        // 等待第一帧以获取视频信息
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 显示视频信息
+        double fps = decoder->get_fps();
+        int64_t bitrate = decoder->get_bitrate();
+        int64_t total_frames = decoder->get_total_frames();
+        
+        printf("\n------ Instance %d 视频信息 ------\n", instance_id);
+        if (fps > 0) {
+            printf("帧率: %.2f FPS\n", fps);
+        } else {
+            printf("帧率: 未知\n");
+        }
+        
+        if (bitrate > 0) {
+            printf("码率: %.2f Mbps (%lld bps)\n", bitrate / 1000000.0, bitrate);
+        } else {
+            printf("码率: 未知\n");
+        }
+        
+        if (total_frames >= 0) {
+            printf("总帧数: %lld 帧\n", total_frames);
+            if (fps > 0) {
+                printf("视频时长: %.2f 秒\n", total_frames / fps);
+            }
+        } else {
+            printf("总帧数: N/A (RTSP流不支持)\n");
+        }
+        printf("--------------------------------\n\n");
+
+        
+        // 运行一段时间（处理50帧）
+        int frame_count = 0;
+        int max_frames = 500;
+        int empty_count = 0;
+        
+        while (frame_count < max_frames) {
+            vector<long long> mat_info = decoder->get_frame();
+            
+            if (mat_info.empty()) {
+                empty_count++;
+                std::cout << "Instance " << instance_id 
+                          << " - 获取帧失败 #" << empty_count << std::endl;
+                continue;
+            }
+            std::cout << "Instance " << instance_id 
+                      << " - Frame #" << (frame_count + 1) 
+                      << " - PTS: " << mat_info[3] << " ms" << std::endl;
+            // exit(0);
+            empty_count = 0;
+            frame_count++;
+            
+            long long pts_ms = mat_info[3];
+            double fps_val = mat_info[4] / 100.0;  // FPS stored as fps*100
+            long long bitrate_val = mat_info[5];
+            long long total_frames_val = mat_info[6];
+            
+            if (frame_count % 10 == 0) {
+                // printf("Instance %d - Frame %d/%d - PTS: %lld ms (%.2f sec) - FPS: %.2f - Bitrate: %.2f Mbps\n", 
+                //        instance_id, frame_count, max_frames, pts_ms, pts_ms / 1000.0,
+                //        fps_val, bitrate_val / 1000000.0);
+            }
+            // 释放内存
+            if(mat_info[0] > 0)
+                free(reinterpret_cast<void*>(mat_info[0]));
+        }
+        
+        printf("Instance %d - 已处理 %d 帧\n", instance_id, frame_count);
+        
+        // 停止解码器
+        printf("Instance %d - 停止解码器...\n", instance_id);
+        decoder->stop();
+        printf("Instance %d - 已停止\n", instance_id);
+        
+        // 等待一段时间再重连
+        int wait_time = 2000;
+        printf("Instance %d - 等待 %d ms 后重连...\n", instance_id, wait_time);
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
+        
+        reconnect_count++;
     }
+    
+    printf("\n=== Instance %d - 重连测试完成，共重连 %d 次 ===\n\n", 
+           instance_id, reconnect_count);
 }
 int main(int argc, char* argv[])
 {
     printf("decoder sdk test!\n");
+    
+    // 检查参数
+    if (argc < 2) {
+        printf("用法: %s <video_list_file> [test_mode]\n", argv[0]);
+        printf("  test_mode: 1=标准模式(默认), 2=重连测试模式\n");
+        return -1;
+    }
+    
+    // 读取测试模式
+    int test_mode = 1;  // 默认标准模式
+    if (argc >= 3) {
+        test_mode = atoi(argv[2]);
+    }
+    
+    // 读取视频列表
     vector<string> video_paths;
-    // = {
-    // "rtsp://admin:xtkj12345@192.168.1.87:554/h264/ch33/main/av_stream",
-    // "rtsp://admin:admin123@192.168.1.65:554/h264/ch33/main/av_stream",
-    // "rtsp://admin:xtkj12345@192.168.1.86:554/h264/ch33/main/av_stream",
-    //             // "rtsp://192.168.1.11/test.mp4"
-    //             // "rtsp://192.168.1.137/video/S2N-1920x1080-2M.mp4"
-    //             "rtsp://192.168.1.11/test.mp4"
-    //                         };
     string rtsp_file = argv[1];
     read_txt_rtsps(rtsp_file, video_paths);
     int thread_num = video_paths.size();
-    for (auto video_path : video_paths)
-        std::cout << "video path:" << video_path << std::endl;
-    std::cout << "thread num:" << thread_num << std::endl;
+    
+    printf("===========================================\n");
+    printf("视频源数量: %d\n", thread_num);
+    for (int i = 0; i < video_paths.size(); i++) {
+        printf("  [%d] %s\n", i, video_paths[i].c_str());
+    }
+    printf("测试模式: %s\n", test_mode == 2 ? "重连测试" : "标准模式");
+    printf("===========================================\n\n");
+    
+    // 创建解码器实例
     vector<xtkj::IDecoder*> decoders(thread_num);
-    // xtkj::IDecoder* decoder1    = xtkj::createDecoder();
-    // xtkj::IDecoder* decoder2   = xtkj::createDecoder();
-    // int             thread_num = 4;
-    // int             timeout_ms = 200;
-    int            timeout_ms = 200;
-    vector<string> enc_type{"H264", "H265", "H264", "H264"};
+    int timeout_ms = 200;
+    
     for (int i = 0; i < thread_num; i++) {
         decoders[i] = xtkj::createDecoder();
-        decoders[i]->init(i, 1, timeout_ms);
-        printf("init ok!\n");
-        decoders[i]->start_pull(video_paths[i], 0);
-        // std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        decoders[i]->init(i, timeout_ms);
+        printf("Instance %d - 初始化完成\n", i);
     }
-    // std::this_thread::sleep_for(std::chrono::milliseconds(2000000));
-    // for(int i = 0;i<thread_num;i++){
-    //     run(decoders[i], i);
-    // }
+    
+    if (test_mode == 2) {
+        // 重连测试模式
+        printf("\n========== 重连测试模式 ==========\n");
+        printf("将测试每个视频源的重连功能\n");
+        printf("每个视频源将:\n");
+        printf("  1. 启动并处理50帧\n");
+        printf("  2. 停止解码器\n");
+        printf("  3. 等待2秒\n");
+        printf("  4. 重新启动\n");
+        printf("  5. 重复3次\n");
+        printf("===================================\n\n");
+        
+        // 顺序测试每个视频源的重连功能
+        for (int i = 0; i < thread_num; i++) {
+            printf("\n>>> 测试视频源 %d: %s\n", i, video_paths[i].c_str());
+            test_reconnect(decoders[i], video_paths[i], i);
+        }
+        
+        printf("\n========== 所有重连测试完成 ==========\n");
+    }
+    else {
+        // 标准模式
+        printf("\n========== 标准模式 ==========\n");
+        int status = 100;
+        // 启动所有解码器
+        for (int i = 0; i < thread_num; i++) {
+            status = decoders[i]->get_status();
 
-    std::vector<std::thread> threads;
-    threads.resize(thread_num);
+            printf("解码器状态： %d\n", status);
+            int ret = decoders[i]->start_pull(video_paths[i], 0, 1);
+            if (ret != 0) {
+                printf("Instance %d - 启动失败\n", i);
+            }
+            else {
+                printf("Instance %d - 启动成功\n", i);
+            }
+        }
+        
+        // 等待一些时间让流初始化
+        printf("\n等待视频流初始化...\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        
+        // 显示所有视频源的信息
+        printf("\n========== 视频信息 ==========\n");
+        for (int i = 0; i < thread_num; i++) {
+            double fps = decoders[i]->get_fps();
+            int64_t bitrate = decoders[i]->get_bitrate();
+            int64_t total_frames = decoders[i]->get_total_frames();
+            // 解码器状态
+            status = decoders[i]->get_status();
+            
+            
+            printf("\n--- Instance %d: %s ---\n", i, video_paths[i].c_str());
+            printf("解码器状态: %d\n", status);
+            if (fps > 0) {
+                printf("帧率: %.2f FPS\n", fps);
+            } else {
+                printf("帧率: 未知\n");
+            }
+            
+            if (bitrate > 0) {
+                printf("码率: %.2f Mbps\n", bitrate / 1000000.0);
+            } else {
+                printf("码率: 未知\n");
+            }
+            
+            if (total_frames >= 0) {
+                printf("总帧数: %lld\n", total_frames);
+                if (fps > 0) {
+                    printf("时长: %.2f秒\n", total_frames / fps);
+                }
+            } else {
+                printf("总帧数: N/A (RTSP流)\n");
+            }
+        }
+        printf("\n=================================\n\n");
+        
+        // 创建线程处理帧
+        std::vector<std::thread> threads;
+        threads.resize(thread_num);
+        for (int i = 0; i < thread_num; i++) {
+            threads[i] = thread(run, decoders[i], video_paths[i], i);
+        }
+        
+        // 等待所有线程完成
+        for (int i = 0; i < thread_num; i++) {
+            threads[i].join();
+        }
+    }
+    
+    // 清理资源
+    printf("\n清理资源...\n");
     for (int i = 0; i < thread_num; i++) {
-        threads[i] = thread(run, decoders[i], video_paths[i], i);
+        xtkj::releaseDecoder(decoders[i]);
     }
-    for (int i = 0; i < thread_num; i++) {
-        threads[i].join();
-    }
+    printf("完成\n");
 
-    // decoder1->init(1, 0, timeout_ms);
-    // decoder2->init(2, 0, timeout_ms);
-    // string video_path =
-    //     "/home/user/videos/device195_2022-11-28_15-20_15-40.mp4";
-    // string video_path =
-    //     "/home/user/videos/device2349_2022-10-31_10-00_10-20.mp4";
-    // string video_path =
-    //     "/home/linaro/device1025_2022-10-24_09-00_09-20.mp4";
-    // string video_path1 =
-    // "rtsp://admin:xtkj12345@192.168.1.87:554/h264/ch33/main/av_stream";
-    // string video_path2 =
-    // "rtsp://192.168.1.137/video/S2N-1920x1080-2M.mp4";
-    // string video_path = "rtmp://192.168.1.111:1935/live/livestream";
-    // string video_path =
-    // "rtsp://admin:123456@192.168.1.123:554/h264/ch33/main/av_stream";
-    // string video_path =
-    // "rtsp://admin:xtkj12345@192.168.1.82:554/h264/ch33/main/av_stream";
-    // string video_path = "rtsp://192.168.1.137/video/1.mp4";
-
-    // bool ret1   = decoder->start(video_path, "H264");
-    // bool ret2   = decoder->start(video_path, "H264");
-    // std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    // int  count = 0;
-
-    // while (true) {
-    //     count++;
-    //     // std::this_thread::sleep_for(
-    //     //     std::chrono::milliseconds(1));  // 线程休眠1ms
-    //     // std::cout << "out:" << decoder->get_frame() << std::endl;
-    //     auto start = std::chrono::high_resolution_clock::now();
-    //     vector<long long> mat_info = decoder->get_frame();
-    //     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-    //     if (mat_info.empty()) {
-    //         printf("out is null!\n");
-    //         continue;
-    //     }
-
-    //     cv::Mat mat =
-    //         cv::Mat(mat_info[2], mat_info[1], CV_8UC4,
-    // (cv::Mat*)mat_info[0]);
-    //     cv::cvtColor(mat, mat, cv::COLOR_BGRA2BGR);
-
-    //     printf("pts:%lld\n",mat_info[3]);
-    //     std::cout << "get frame " << count << " ok" << std::endl;
-    //     // cv::imwrite("out_frames/out_" + std::to_string(count) + ".jpg",
-    // mat);
-    //     // if(mat_info[0]>0)
-    //     free(reinterpret_cast<void*>(mat_info[0]));
-    //     // if(count > 10) decoder->stop();
-
-    //     // cv::imwrite("out_frames/out_" + std::to_string(count) + ".jpg",
-    // mat);
-
-    //     // if (count > 2) {
-    //     //     printf("stop---------------------!\n");
-    //     //     // decoder->stop();
-    //     //     printf("11111111111111111\n");
-    //     //     break;
-    //     // }
-    // }
-    // printf("11111122222222222222\n");
-    // xtkj::releaseDecoder(decoder);
-
-    // ret = decoder->start(video_path);
-    // while (true) {
-    //     count++;
-    //     // std::this_thread::sleep_for(
-    //     //     std::chrono::milliseconds(1));  // 线程休眠1ms
-    //     // std::cout << "out:" << decoder->get_frame() << std::endl;
-    //     auto              start    =
-    //     std::chrono::high_resolution_clock::now(); vector<long long>
-    // mat_info
-    //     = decoder->get_frame(); if (mat_info.empty()) {
-    //         printf("out is null!\n");
-    //         continue;
-    //     }
-    //     cv::Mat mat =
-    //         cv::Mat(mat_info[2], mat_info[1], CV_8UC3,
-    //         (cv::Mat*)mat_info[0]);
-    //     cv::imwrite("out_frames/out_" + std::to_string(count) + ".jpg",
-    // mat);
-    //     free(reinterpret_cast<void*>(mat_info[0]));
-    //     // 获取当前时间点
-    //     auto end = std::chrono::high_resolution_clock::now();
-    //     // 计算时间差
-    //     auto duration =
-    //         std::chrono::duration_cast<std::chrono::milliseconds>(end -
-    //         start)
-    //             .count();
-
-    //     // 输出时间差
-    //     printf("代码运行时间: %d 毫秒\n", duration);
-    //     printf("current idx:%d\n", count);
-    //     if (count == 20) {
-    //         // printf("stop!\n");
-    //         decoder->stop();
-
-    //         break;
-    //     }
-    // }
     return 0;
 }

@@ -62,27 +62,88 @@
 using namespace std;
 namespace xtkj {
 
+/**
+ * @description: 解码器状态枚举
+ */
+enum DecoderStatus {
+    DECODER_STATUS_IDLE = 0,     // 未打开/空闲状态
+    DECODER_STATUS_OPENING = 1,  // 正在打开中
+    DECODER_STATUS_OPENED = 2,   // 正常打开/运行中
+    DECODER_STATUS_FAILED = 3    // 打开失败
+};
+
 class IDecoder {
   public:
     /**
-     * @description: 初始化
-     * @param {int} decode_thread_num 解码线程数
-     * @param {int} timeout_ms 超时时间
-     * @return {*}
+     * @description: 初始化解码器
+     * @param {int} decode_thread_num 解码线程索引/实例编号
+     * @param {int} timeout_ms 获取帧超时时间（毫秒）
+     * @return 0成功，其他失败
      */
     virtual int init(int decode_thread_num,
-                     int frame_interval = 1,
-                     int timeout_ms     = 200) = 0;
+                     int timeout_open_ms = 10000,
+                     int timout_frame_ms = 5000) = 0;
     /**
-     * @description: 获取解码的帧
-     * @return long数组，分别为 mat地址 宽 高
+     * @description: 获取解码的帧数据（BGR格式）及视频信息
+     * @return long数组，分别为 [mat数据地址, 宽度, 高度, 时间戳(毫秒), 帧率, 码率, 总帧数]
+     *         - [0] BGR数据地址：需要调用free()释放
+     *         - [1] 宽度：图像宽度（像素）
+     *         - [2] 高度：图像高度（像素）
+     *         返回空数组表示超时或错误
      */
     virtual vector<long long> get_frame() = 0;
+    /**
+     * @description: 开始拉取视频流或打开本地视频文件
+     * @param {string} video_path RTSP流地址(rtsp://)或本地视频文件路径
+     * @param {int} is_mpp 是否使用MPP硬件解码（仅RTSP流，0=软解，1=硬解）
+     * @param {int} interval 跳帧模式：
+     *                       0 = 处理所有帧（不跳帧）
+     *                       1 = 跳帧模式，跳过奇数帧保留偶数帧（第0,2,4...帧），帧率减半
+     * @return 0成功，非0失败
+     * @note 自动识别RTSP流和本地文件路径
+     *       跳帧模式可以降低CPU使用率和网络带宽，适用于预览等低帧率场景
+     */
     virtual int
-                   start_pull(string video_path, int is_mpp = 1, int interval = 1) = 0;
+                   start_pull(string video_path, int is_mpp = 1, int interval = 0) = 0;
+    /**
+     * @description: 停止视频拉取/读取
+     * @return 0成功
+     */
     virtual int    stop()           = 0;
+    /**
+     * @description: 获取空帧次数（用于监控连接状态）
+     * @return 空帧累计次数
+     */
     virtual int    get_null_times() = 0;
+    /**
+     * @description: 获取当前视频源路径
+     * @return RTSP地址或本地文件路径
+     */
     virtual string get_rtsp()       = 0;
+    /**
+     * @description: 获取视频帧率（FPS）
+     * @return 帧率，RTSP流和本地文件均支持，失败返回0
+     */
+    virtual double get_fps()        = 0;
+    /**
+     * @description: 获取视频码率（bps）
+     * @return 码率（比特率/秒），RTSP流和本地文件均支持，失败返回0
+     */
+    virtual int64_t get_bitrate()   = 0;
+    /**
+     * @description: 获取视频总帧数
+     * @return 总帧数，仅本地文件支持，RTSP流返回-1
+     */
+    virtual int64_t get_total_frames() = 0;
+    /**
+     * @description: 获取解码器打开状态
+     * @return DecoderStatus枚举值：
+     *         DECODER_STATUS_IDLE (0) - 未打开/空闲状态
+     *         DECODER_STATUS_OPENING (1) - 正在打开中
+     *         DECODER_STATUS_OPENED (2) - 正常打开/运行中
+     *         DECODER_STATUS_FAILED (3) - 打开失败
+     */
+    virtual int get_status() = 0;
 
     virtual ~IDecoder() noexcept = default;
 };

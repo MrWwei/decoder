@@ -31,7 +31,7 @@ JNIEXPORT jint JNICALL
     int handle = -1;
     for (int i = 1; i <= netNum; i++) {
         if (decoders.count(i) < 1) {
-            int ret = decoder->init(i, 1, timeOutMilliseconds);
+            int ret = decoder->init(i, timeOutMilliseconds);
             if (ret < 0)
                 return ret;
             decoders.emplace(i, decoder);
@@ -42,7 +42,7 @@ JNIEXPORT jint JNICALL
     netNum++;
 
     int netId = netNum;
-    int ret   = decoder->init(netId, 1, timeOutMilliseconds);
+    int ret   = decoder->init(netId, timeOutMilliseconds);
     decoders.emplace(netId, decoder);
     return netId;
 }
