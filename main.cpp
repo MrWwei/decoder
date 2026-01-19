@@ -69,7 +69,7 @@ void run(xtkj::IDecoder* decoder, string rtsp_url, int instance_id)
         //           << " - FPS: " << fps_val
         //           << " - Bitrate: " << (bitrate_val ) << " Mbps"
         //           << std::endl;
-        cv::imwrite("output_instance_" + std::to_string(instance_id) + "_frame_" + std::to_string(count) + ".jpg", mat);
+        // cv::imwrite("output_instance_" + std::to_string(instance_id) + "_frame_" + std::to_string(count) + ".jpg", mat);
         if(mat_info[0] > 0)
             free(reinterpret_cast<void*>(mat_info[0]));
         
@@ -219,10 +219,11 @@ int main(int argc, char* argv[])
     // 创建解码器实例
     vector<xtkj::IDecoder*> decoders(thread_num);
     int timeout_ms = 200;
-    
+    int timeout_open_ms = 10000;
+
     for (int i = 0; i < thread_num; i++) {
         decoders[i] = xtkj::createDecoder();
-        decoders[i]->init(i, timeout_ms);
+        decoders[i]->init(timeout_open_ms, timeout_ms);
         printf("Instance %d - 初始化完成\n", i);
     }
     

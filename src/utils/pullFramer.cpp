@@ -130,7 +130,7 @@ PullFramer::~PullFramer()
     clearConfigFrames();
 }
 
-void PullFramer::setOnGetFrame(const onGetFrame& onGetFrame, void* decoder, int instance_id)
+void PullFramer::setOnGetFrame(const onGetFrame& onGetFrame, void* decoder)
 {
     cb_ = onGetFrame; // 设置函数对象
     decoder_ = decoder; // 设置解码器
@@ -145,7 +145,7 @@ void PullFramer::clearConfigFrames()
     configFramesSize = 0;
 }
 
-bool PullFramer::onFrame(const mk_frame frame_, int instance_id)
+bool PullFramer::onFrame(const mk_frame frame_)
 {
     if (frame_ == NULL) {
 		return false;
@@ -194,7 +194,7 @@ bool PullFramer::onFrame(const mk_frame frame_, int instance_id)
             memcpy(mergedData + configFramesSize, data, size);
             clearConfigFrames();
             if (cb_) {
-                cb_(FrameData::CreateShared(mergedData, totalSize, frame_), decoder_,instance_id);
+                cb_(FrameData::CreateShared(mergedData, totalSize, frame_), decoder_);
             }
             else {
                 printf("on Frame %zu [%.2x %.2x %.2x %.2x %.2x %.2x]\n", totalSize, mergedData[0], mergedData[1], mergedData[2], mergedData[3], (mergedData[4] & 0xff), (mergedData[5] & 0xff));
@@ -206,7 +206,7 @@ bool PullFramer::onFrame(const mk_frame frame_, int instance_id)
         }
         else {
             if (cb_) {
-                cb_(FrameData::CreateShared(frame_), decoder_,instance_id);
+                cb_(FrameData::CreateShared(frame_), decoder_);
             }
             else {
                 printf("on Frame %zu [%.2x %.2x %.2x %.2x %.2x %.2x]\n", size, data[0], data[1], data[2], data[3], (data[4] & 0xff), (data[5] & 0xff));

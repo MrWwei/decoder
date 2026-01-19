@@ -47,10 +47,13 @@ struct DecoderConfig {
     static constexpr int MAX_RETRY_TIMES = 20;
 };
 
+// Forward declaration
+class Decoder;
+
 static unsigned char* load_data(FILE* fp, size_t ofst, size_t sz);
 static unsigned char* read_file_data(const char* filename, int* model_size);
 void* YV12ToBGR24_OpenCV(unsigned char* pYUV, int width, int height);
-static void clear_frame_stack(int instance_index);
+static void clear_frame_stack(Decoder* decoder);
 static void log_error(const std::string& msg);
 static void log_info(const std::string& msg);
 static bool is_rtsp_url(const std::string& path);
@@ -70,6 +73,7 @@ private:
     int height_;
     bool opened_;
     std::atomic<bool> stop_;
+    bool loop_playback_;  // Whether to loop playback when reaching end
     int64_t last_pts_;  // Store last frame PTS in milliseconds
     double time_base_;  // Time base for PTS conversion
     double fps_;        // Frame rate
@@ -81,7 +85,8 @@ public:
                          frame_(nullptr), frameRGB_(nullptr), packet_(nullptr),
                          swsContext_(nullptr), buffer_(nullptr),
                          videoStreamIndex_(-1), width_(0), height_(0),
-                         opened_(false), stop_(false), last_pts_(0), time_base_(0.0),
+                         opened_(false), stop_(false), loop_playback_(true),
+                         last_pts_(0), time_base_(0.0),
                          fps_(0.0), bitrate_(0), total_frames_(-1) {}
 
     ~LocalVideoReader() {
@@ -250,13 +255,15 @@ public:
                 av_packet_unref(packet_);
             }
 
-            // End of file, seek to beginning for loop playback
-            if (!stop_.load()) {
+            // End of file
+            if (!stop_.load() && loop_playback_) {
+                // Loop playback: seek to beginning
                 av_seek_frame(formatContext_, videoStreamIndex_, 0, AVSEEK_FLAG_BACKWARD);
                 avcodec_flush_buffers(codecContext_);
                 last_pts_ = 0;  // Reset PTS for new loop
                 // Continue the outer loop to read from the beginning
             } else {
+                // Stop playback or no loop
                 break;
             }
         }
@@ -266,6 +273,10 @@ public:
 
     void stopReading() {
         stop_.store(true);
+    }
+    
+    void setLoopPlayback(bool loop) {
+        loop_playback_ = loop;
     }
 
     int getWidth() const { return width_; }
@@ -288,10 +299,7 @@ private:
     }
 };
 
-vector<std::mutex>              stack_mutexs_(16);
-vector<std::condition_variable> stack_conds_(16);
-// std::condition_variable cv_;
-// bool resourceReady = false;
+// 移除全局容器，改为每个Decoder实例内部管理
 
 typedef struct
 {
@@ -302,7 +310,7 @@ typedef struct
     int            decoder_init = 0;
     image_frame_t* frame;
     uint64_t       frame_pts{0};
-    int            instance_index{0};
+    // int            instance_index{0};
     int            frame_count{0};
     int            decode_type{0};
     bool           stop{false};
@@ -314,7 +322,6 @@ typedef struct
     image_frame_t* frame;
     uint64_t       frame_pts{0};
 } frame_info;
-vector<std::stack<image_frame_t*>> frame_stacks_(16);
 
 class Decoder : public IDecoder {
   public:
@@ -341,8 +348,7 @@ class Decoder : public IDecoder {
             local_video_reader_.reset();
         }
     };
-    int               init(int decode_thread_num,
-                           int timeout_open_ms = 10000,
+    int               init(int timeout_open_ms = 10000,
                             int timout_frame_ms = 5000) override;
     vector<long long> get_frame() override;
     int               get_null_times() override;
@@ -355,12 +361,18 @@ class Decoder : public IDecoder {
     int64_t get_bitrate() override;
     int64_t get_total_frames() override;
     int    get_status() override;
+    void   set_loop_playback(bool loop) override;
     
     // Setter methods for updating video info (used in callbacks)
     void set_fps(double fps) { fps_ = fps; }
     void set_bitrate(int64_t bitrate) { bitrate_ = bitrate; }
     void set_total_frames(int64_t frames) { total_frames_ = frames; }
     void set_status(int status) { decoder_status_.store(status); }
+    
+    // Public access to synchronization primitives for callback functions
+    std::mutex              stack_mutex_;
+    std::condition_variable stack_cond_;
+    std::stack<image_frame_t*> frame_stack_;
     
     std::atomic<bool> stop_{false};;
     std::atomic<int>  reopen_times_{0};
@@ -380,6 +392,7 @@ class Decoder : public IDecoder {
     int                          timeout_open_ms_{DecoderConfig::DEFAULT_TIMEOUT_MS};
     int                          timeout_frame_ms_{DecoderConfig::DEFAULT_TIMEOUT_MS};
     bool                         is_local_file_{false};
+    bool                         loop_local_video_{true};  // Loop local video by default
     
     // Video info cache
     double   fps_{0.0};
@@ -394,17 +407,17 @@ class Decoder : public IDecoder {
                       std::promise<bool>& pro);
     int process_local_video(const char* path, std::promise<bool>& pro);
 };
-void mpp_decoder_frame_callback(void*    userdata,
-                                int      width_stride,
-                                int      height_stride,
-                                int      width,
-                                int      height,
-                                int      format,
-                                int      fd,
-                                void*    data,
-                                uint64_t frame_pts,
-                                size_t   data_size);
-void onGetFrame(const FrameData::Ptr& frame, void* userData1, int instance_id);
+// void mpp_decoder_frame_callback(void*    userdata,
+//                                 int      width_stride,
+//                                 int      height_stride,
+//                                 int      width,
+//                                 int      height,
+//                                 int      format,
+//                                 int      fd,
+//                                 void*    data,
+//                                 uint64_t frame_pts,
+//                                 size_t   data_size);
+void onGetFrame(const FrameData::Ptr& frame, void* userData1);
 
 // Helper logging functions
 static void log_error(const std::string& msg)
@@ -420,17 +433,18 @@ static void log_info(const std::string& msg)
 // Helper function to check if path is RTSP URL
 static bool is_rtsp_url(const std::string& path)
 {
-    return (path.find("rtsp://") == 0 || path.find("rtmp://") == 0 || 
-            path.find("http://") == 0 || path.find("https://") == 0);
+    return (path.find("rtsp://") == 0 || path.find("rtmp://") == 0);
 }
 
 // Helper function to clear frame stack
-static void clear_frame_stack(int instance_index)
+static void clear_frame_stack(Decoder* decoder)
 {
-    std::unique_lock<std::mutex> lock(stack_mutexs_[instance_index]);
-    while (!frame_stacks_[instance_index].empty()) {
-        image_frame_t* frame_item = frame_stacks_[instance_index].top();
-        frame_stacks_[instance_index].pop();
+    if (!decoder) return;
+    
+    std::unique_lock<std::mutex> lock(decoder->stack_mutex_);
+    while (!decoder->frame_stack_.empty()) {
+        image_frame_t* frame_item = decoder->frame_stack_.top();
+        decoder->frame_stack_.pop();
         if (frame_item) {
             if (frame_item->virt_addr) {
                 free(frame_item->virt_addr);
@@ -442,20 +456,19 @@ static void clear_frame_stack(int instance_index)
 }
 
 
-int  Decoder::init(int decode_thread_num, int timeout_open_ms, int timout_frame_ms)
+int  Decoder::init(int timeout_open_ms, int timout_frame_ms)
 {    if (app_ctx_.frame) {
         delete app_ctx_.frame;
         app_ctx_.frame = nullptr;
-    }    app_ctx_.frame          = new image_frame_t();
-    app_ctx_.instance_index = decode_thread_num;
+    }    
+    app_ctx_.frame          = new image_frame_t();
 
     timeout_open_ms_ = timeout_open_ms;
     timeout_frame_ms_ = timout_frame_ms;
 
     app_ctx_.puller         = static_cast<void*>(&puller_);
     app_ctx_.decoder_ffmpeg = static_cast<void*>(&decoder_soft_);
-    puller_->setOnGetFrame(onGetFrame, static_cast<void*>(&app_ctx_),
-                           app_ctx_.instance_index);
+    puller_->setOnGetFrame(onGetFrame, static_cast<void*>(&app_ctx_));
 
     return 0;
 }
@@ -496,8 +509,19 @@ int Decoder::get_status()
     return decoder_status_.load();
 }
 
+void Decoder::set_loop_playback(bool loop)
+{
+    loop_local_video_ = loop;
+}
+
 int Decoder::start_pull(string video_path, int is_mpp, int interval)
 {
+    // Check if already running, stop first
+    if (worker_ && worker_->joinable()) {
+        log_info("Decoder already running, stopping first...");
+        stop();
+    }
+    
     stop_.store(false);
     app_ctx_.stop        = false;
     app_ctx_.is_mpp      = is_mpp;
@@ -514,7 +538,8 @@ int Decoder::start_pull(string video_path, int is_mpp, int interval)
     std::promise<bool> pro;
     
     if (is_local_file_) {
-        log_info(std::string("Starting local video file: ") + video_path);
+        log_info(std::string("Starting local video file: ") + video_path + 
+                 (loop_local_video_ ? " (loop mode)" : " (once mode)"));
         worker_ = std::make_shared<std::thread>(&Decoder::process_local_video, this,
                                                 video_path.c_str(), std::ref(pro));
     } else {
@@ -585,13 +610,16 @@ int           Decoder::process_video(app_context_t*      ctx,
     
     bool      reconnect_flag = false;
     mk_player player         = mk_player_create();
-
+   
     mk_player_set_on_result(player, on_mk_play_event_func, ctx);
     mk_player_set_on_shutdown(player, on_mk_shutdown_func, ctx);
     mk_player_set_option(player, "rtp_type", "0");
     mk_player_set_option(player, "protocol_timeout_ms", std::to_string(timeout_open_ms_).c_str());
     mk_player_set_option(player, "media_timeout_ms", std::to_string(timeout_frame_ms_).c_str());
     mk_player_set_option(player, "wait_track_ready", "true");
+
+    std::cout << "timeout_open_ms_: " << timeout_open_ms_ << std::endl;
+    std::cout << "timeout_frame_ms_: " << timeout_frame_ms_ << std::endl;
     // mk_player_set_option(player, "beat_interval_ms", "1000");
 
     mk_player_play(player, path);
@@ -614,10 +642,14 @@ int           Decoder::process_video(app_context_t*      ctx,
 }
 void* YV12ToBGR24_OpenCV_FFMPEG(unsigned char* pYUV, int width, int height);
 void  onGetFrame(const FrameData::Ptr& framePtr,
-                 void*                 userData1,
-                 int                   instance_id)
+                 void*                 userData1)
 {
     app_context_t* ctx = (app_context_t*)userData1;
+    
+    // Check if decoder is stopping, avoid memory allocation
+    if (ctx->stop || !ctx->decoder_instance) {
+        return;
+    }
 
     std::shared_ptr<VideoDecoder>* decoderPtr =
         static_cast<std::shared_ptr<VideoDecoder>*>(ctx->decoder_ffmpeg);
@@ -655,12 +687,25 @@ void  onGetFrame(const FrameData::Ptr& framePtr,
         uint64_t pts_cur = framePtr->pts() * 1000;
         ctx->frame_pts += pts_cur;
         frame->pts = ctx->frame_pts;
+        
+        // Get Decoder instance to access member variables
+        Decoder* decoder_obj = static_cast<Decoder*>(ctx->decoder_instance);
+        if (!decoder_obj) {
+            // Cleanup if decoder instance is null
+            if (frame->virt_addr) {
+                free(frame->virt_addr);
+                frame->virt_addr = nullptr;
+            }
+            delete frame;
+            return;
+        }
+        
         {
-            std::unique_lock<std::mutex> lock(stack_mutexs_[instance_id]);
+            std::unique_lock<std::mutex> lock(decoder_obj->stack_mutex_);
 
-            while (frame_stacks_[instance_id].size() >= DecoderConfig::MAX_STACK_SIZE) {
-                image_frame_t* frame_item = frame_stacks_[instance_id].top();
-                frame_stacks_[instance_id].pop();
+            while (decoder_obj->frame_stack_.size() >= DecoderConfig::MAX_STACK_SIZE) {
+                image_frame_t* frame_item = decoder_obj->frame_stack_.top();
+                decoder_obj->frame_stack_.pop();
                 if (frame_item) {
                     if (frame_item->virt_addr) {
                         free(frame_item->virt_addr);
@@ -670,8 +715,8 @@ void  onGetFrame(const FrameData::Ptr& framePtr,
                 }
             }
 
-            frame_stacks_[instance_id].push(frame);
-            stack_conds_[instance_id].notify_all();
+            decoder_obj->frame_stack_.push(frame);
+            decoder_obj->stack_cond_.notify_all();
         }
     }
 }
@@ -717,63 +762,76 @@ int Decoder::get_null_times()
     return null_frame_times_;
 }
 
-void mpp_decoder_frame_callback(void*    userdata,
-                                int      width_stride,
-                                int      height_stride,
-                                int      width,
-                                int      height,
-                                int      format,
-                                int      fd,
-                                void*    data,
-                                uint64_t frame_pts,
-                                size_t   data_size)
-{
-    app_context_t* ctx = (app_context_t*)userdata;
-    ctx->frame_count++;
+// void mpp_decoder_frame_callback(void*    userdata,
+//                                 int      width_stride,
+//                                 int      height_stride,
+//                                 int      width,
+//                                 int      height,
+//                                 int      format,
+//                                 int      fd,
+//                                 void*    data,
+//                                 uint64_t frame_pts,
+//                                 size_t   data_size)
+// {
+//     app_context_t* ctx = (app_context_t*)userdata;
     
-    // 跳帧处理：当 is_interval=true 时，跳过奇数帧，保留偶数帧（第0,2,4...帧）
-    if (ctx->is_interval) {
-        if (ctx->frame_count % 2 != 0) {
-            return;  // 跳过奇数帧
-        }
-    }
+//     // Check if decoder is stopping, avoid memory allocation
+//     if (ctx->stop || !ctx->decoder_instance) {
+//         return;
+//     }
+    
+//     ctx->frame_count++;
+    
+//     // 跳帧处理：当 is_interval=true 时，跳过奇数帧，保留偶数帧（第0,2,4...帧）
+//     if (ctx->is_interval) {
+//         if (ctx->frame_count % 2 != 0) {
+//             return;  // 跳过奇数帧
+//         }
+//     }
 
-    {
-        std::unique_lock<std::mutex> lock(stack_mutexs_[ctx->instance_index]);
-        image_frame_t*               frame = new image_frame_t();
-        frame->height                      = height;
-        frame->width                       = width;
-        frame->data_size                   = data_size;
-        frame->height_stride               = height_stride;
-        frame->width_stride                = width_stride;
-        frame->virt_addr                   = malloc(data_size);
-        if (frame->virt_addr == nullptr) {
-            // log_error("Failed to allocate memory for frame data");
-            delete frame;
-            return;
-        }
-        memcpy(frame->virt_addr, data, data_size);
-        ctx->frame_pts += frame_pts;
-        frame->pts = ctx->frame_pts;
+//     // Get Decoder instance to access member variables
+//     Decoder* decoder_obj = static_cast<Decoder*>(ctx->decoder_instance);
+//     if (!decoder_obj) {
+//         // No decoder instance available
+//         return;
+//     }
+    
+//     {
+//         std::unique_lock<std::mutex> lock(decoder_obj->stack_mutex_);
+//         image_frame_t*               frame = new image_frame_t();
+//         frame->height                      = height;
+//         frame->width                       = width;
+//         frame->data_size                   = data_size;
+//         frame->height_stride               = height_stride;
+//         frame->width_stride                = width_stride;
+//         frame->virt_addr                   = malloc(data_size);
+//         if (frame->virt_addr == nullptr) {
+//             // log_error("Failed to allocate memory for frame data");
+//             delete frame;
+//             return;
+//         }
+//         memcpy(frame->virt_addr, data, data_size);
+//         ctx->frame_pts += frame_pts;
+//         frame->pts = ctx->frame_pts;
 
-        while (frame_stacks_[ctx->instance_index].size() >= DecoderConfig::MAX_STACK_SIZE) {
-            image_frame_t* frame_item = frame_stacks_[ctx->instance_index].top();
-            frame_stacks_[ctx->instance_index].pop();
-            if (frame_item) {
-                if (frame_item->virt_addr) {
-                    free(frame_item->virt_addr);
-                    frame_item->virt_addr = nullptr;
-                }
-                delete frame_item;
-            }
-        }
+//         while (decoder_obj->frame_stack_.size() >= DecoderConfig::MAX_STACK_SIZE) {
+//             image_frame_t* frame_item = decoder_obj->frame_stack_.top();
+//             decoder_obj->frame_stack_.pop();
+//             if (frame_item) {
+//                 if (frame_item->virt_addr) {
+//                     free(frame_item->virt_addr);
+//                     frame_item->virt_addr = nullptr;
+//                 }
+//                 delete frame_item;
+//             }
+//         }
 
-        frame_stacks_[ctx->instance_index].push(frame);
-        stack_conds_[ctx->instance_index].notify_all();
-    }
+//         decoder_obj->frame_stack_.push(frame);
+//         decoder_obj->stack_cond_.notify_all();
+//     }
 
-    return;
-}
+//     return;
+// }
 vector<long long> Decoder::get_frame()
 {
     // For local video files: synchronous blocking read, no cache, no frame drop
@@ -824,41 +882,37 @@ vector<long long> Decoder::get_frame()
     // For RTSP streams: use frame stack with timeout and retry logic
     image_frame_t* frame{nullptr};
     {
-        std::unique_lock<std::mutex> lock(
-            stack_mutexs_[app_ctx_.instance_index]);
-        int ins_index = app_ctx_.instance_index;
-        stack_conds_[app_ctx_.instance_index].wait_for(
+        std::unique_lock<std::mutex> lock(stack_mutex_);
+        stack_cond_.wait_for(
             lock, std::chrono::milliseconds(timeout_frame_ms_),
-            [ins_index] { return !frame_stacks_[ins_index].empty(); });
-        if (frame_stacks_[ins_index].empty()) {
-            stack_conds_[app_ctx_.instance_index].notify_all();
+            [this] { return !frame_stack_.empty(); });
+        if (frame_stack_.empty()) {
+            stack_cond_.notify_all();
             lock.unlock();
             
             int null_times = null_frame_times_.fetch_add(1) + 1;
             if (null_times > failed_times_) {
-                // log_error("Max retry times reached, attempting to reconnect");
-                std::cout << "Max retry times reached, attempting to reconnect" << std::endl;
-                stop();
-                start_pull();
-
-                null_frame_times_.store(0);
-                int reopen_count = reopen_times_.fetch_add(1) + 1;
+                // Max retry times reached, mark as failed
+                // Let upper layer handle reconnection to avoid recursion risks
+                std::cout << "[WARNING] Max retry times reached (" << null_times 
+                          << "), connection may be lost. Call stop() and start_pull() to reconnect." << std::endl;
+                decoder_status_.store(DECODER_STATUS_FAILED);
                 
-                std::ofstream f("sdk_log_" +
-                                    std::to_string(app_ctx_.instance_index) +
-                                    ".log",
+                int reopen_count = reopen_times_.fetch_add(1) + 1;
+                std::ofstream f("reopened_log.log",
                                 std::ios::app);
                 if (f.is_open()) {
-                    f << "Reopen times: " << reopen_count << std::endl;
+                    f << "Connection lost, retry count: " << reopen_count 
+                      << ", null_times: " << null_times << std::endl;
                     f.close();
                 }
             }
             return {};
         }
 
-        frame = frame_stacks_[ins_index].top();
-        frame_stacks_[ins_index].pop();
-        stack_conds_[app_ctx_.instance_index].notify_all();
+        frame = frame_stack_.top();
+        frame_stack_.pop();
+        stack_cond_.notify_all();
     }
     
     // For RTSP streams, convert YUV to BGR
@@ -918,6 +972,9 @@ int Decoder::process_local_video(const char* path, std::promise<bool>& pro)
         return -1;
     }
     
+    // Set loop playback option
+    local_video_reader_->setLoopPlayback(loop_local_video_);
+    
     log_info("Local video file opened, using synchronous blocking mode (no cache, no frame drop)");
     decoder_status_.store(DECODER_STATUS_OPENED);
     pro.set_value(true);
@@ -944,7 +1001,7 @@ void API_CALL on_track_frame_out(void* user_data, mk_frame frame)
         auto pullerPtr = static_cast<std::shared_ptr<PullFramer>*>(ctx->puller);
         std::shared_ptr<PullFramer> puller = *pullerPtr;
         if (puller) {
-            puller->onFrame(frame, ctx->instance_index);
+            puller->onFrame(frame);
         }
     }
 }
@@ -1056,14 +1113,19 @@ int Decoder::stop()
         local_video_reader_->stopReading();
     }
     
+    // Notify waiting threads to unblock
+    stack_cond_.notify_all();
+    
     this_thread::sleep_for(chrono::milliseconds(200));
     
+    // Properly join and reset the worker thread
     if (worker_ != nullptr && worker_->joinable()) {
         worker_->join();
+        worker_.reset();  // Reset shared_ptr to avoid keeping old thread
     }
     
     // Clear all remaining frames in stack
-    clear_frame_stack(app_ctx_.instance_index);
+    clear_frame_stack(this);
     
     // log_info("Decoder stopped for instance: " + 
     //          std::to_string(app_ctx_.instance_index));

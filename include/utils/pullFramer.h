@@ -46,16 +46,16 @@ private:
 class PullFramer {
 public:
     using Ptr = std::shared_ptr<PullFramer>;
-    using onGetFrame = std::function<void(const FrameData::Ptr&, void* decoder, int instance_id)>;
+    using onGetFrame = std::function<void(const FrameData::Ptr&, void* decoder)>;
     // using onConver = std::function<void(const FFmpegFrame::Ptr &)>;
     static PullFramer::Ptr CreateShared() {
         return std::make_shared<PullFramer>();
     }
-    void setOnGetFrame(const onGetFrame& onGetFrame, void* decoder, int instance_id);
+    void setOnGetFrame(const onGetFrame& onGetFrame, void* decoder);
     PullFramer();
     ~PullFramer();
 
-    bool onFrame(const mk_frame frame, int instance_id);
+    bool onFrame(const mk_frame frame);
 
 private:
     onGetFrame cb_;

@@ -77,12 +77,12 @@ class IDecoder {
     /**
      * @description: 初始化解码器
      * @param {int} decode_thread_num 解码线程索引/实例编号
+     * @param {int} frame_interval 帧间隔，1表示每帧都处理，2表示隔一帧处理
      * @param {int} timeout_ms 获取帧超时时间（毫秒）
      * @return 0成功，其他失败
      */
-    virtual int init(int decode_thread_num,
-                     int timeout_open_ms = 10000,
-                     int timout_frame_ms = 5000) = 0;
+    virtual int init(int timeout_open_ms = 10000,
+                    int timout_frame_ms = 5000) = 0;
     /**
      * @description: 获取解码的帧数据（BGR格式）及视频信息
      * @return long数组，分别为 [mat数据地址, 宽度, 高度, 时间戳(毫秒), 帧率, 码率, 总帧数]
@@ -96,15 +96,12 @@ class IDecoder {
      * @description: 开始拉取视频流或打开本地视频文件
      * @param {string} video_path RTSP流地址(rtsp://)或本地视频文件路径
      * @param {int} is_mpp 是否使用MPP硬件解码（仅RTSP流，0=软解，1=硬解）
-     * @param {int} interval 跳帧模式：
-     *                       0 = 处理所有帧（不跳帧）
-     *                       1 = 跳帧模式，跳过奇数帧保留偶数帧（第0,2,4...帧），帧率减半
+     * @param {int} interval 帧间隔（0=全部帧，1=跳帧）
      * @return 0成功，非0失败
      * @note 自动识别RTSP流和本地文件路径
-     *       跳帧模式可以降低CPU使用率和网络带宽，适用于预览等低帧率场景
      */
     virtual int
-                   start_pull(string video_path, int is_mpp = 1, int interval = 0) = 0;
+                   start_pull(string video_path, int is_mpp = 0, int interval = 1) = 0;
     /**
      * @description: 停止视频拉取/读取
      * @return 0成功
@@ -144,6 +141,13 @@ class IDecoder {
      *         DECODER_STATUS_FAILED (3) - 打开失败
      */
     virtual int get_status() = 0;
+    /**
+     * @description: 设置本地视频文件循环播放模式（仅对本地文件有效）
+     * @param {bool} loop true=循环播放（默认），false=播放一次后自动停止
+     * @note 必须在start_pull()之前调用才能生效
+     *       对RTSP流无效
+     */
+    virtual void set_loop_playback(bool loop) = 0;
 
     virtual ~IDecoder() noexcept = default;
 };
