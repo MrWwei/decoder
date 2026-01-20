@@ -86,7 +86,7 @@ include_directories(${ThirdParty}/jdk1.8.0_381/include/linux)
 
 set(jni_name_rtsp videoDecoder_ubuntu_SDK2.4_JNI_V2.4)
 add_library(${jni_name_rtsp} SHARED
-jni/cn_xtkj_jni_capture_VideoDecoder.cpp
+jni/cn_xtkj_jni_capture_ServerVideoDecoder.cpp
 )
 # link the new hello_library target with the hello_binary target
 target_link_libraries( ${jni_name_rtsp}

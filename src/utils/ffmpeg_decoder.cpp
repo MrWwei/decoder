@@ -99,7 +99,7 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
     if (ret < 0) {
         av_packet_free(&pkt);
         pkt = nullptr;
-        fprintf(stderr, "Error during decoding\n");
+        // fprintf(stderr, "Error during decoding\n");
         return buffer;
     }
     cv::Mat outMat;
@@ -125,7 +125,7 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
         tmp_frame  = frame;
         tmp_pixFmt = static_cast<AVPixelFormat>(tmp_frame->format);
         size       = av_image_get_buffer_size(tmp_pixFmt, tmp_frame->width,
-                                        tmp_frame->height, 1);
+                                              tmp_frame->height, 1);
         buffer     = (uint8_t*)malloc(sizeof(uint8_t) * size);
         data_size  = sizeof(uint8_t) * size;
         if (!buffer) {

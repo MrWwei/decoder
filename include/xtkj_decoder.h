@@ -66,10 +66,10 @@ namespace xtkj {
  * @description: 解码器状态枚举
  */
 enum DecoderStatus {
-    DECODER_STATUS_IDLE = 0,     // 未打开/空闲状态
+    DECODER_STATUS_IDLE    = 0,  // 未打开/空闲状态
     DECODER_STATUS_OPENING = 1,  // 正在打开中
-    DECODER_STATUS_OPENED = 2,   // 正常打开/运行中
-    DECODER_STATUS_FAILED = 3    // 打开失败
+    DECODER_STATUS_OPENED  = 2,  // 正常打开/运行中
+    DECODER_STATUS_FAILED  = 3   // 打开失败
 };
 
 class IDecoder {
@@ -78,14 +78,13 @@ class IDecoder {
      * @description: 初始化解码器
      * @param {int} decode_thread_num 解码线程索引/实例编号
      * @param {int} frame_interval 帧间隔，1表示每帧都处理，2表示隔一帧处理
-     * @param {int} timeout_ms 获取帧超时时间（毫秒）
      * @return 0成功，其他失败
      */
-    virtual int init(int timeout_open_ms = 10000,
-                    int timout_frame_ms = 5000) = 0;
+    virtual int init(int timeout_open_ms = 10000) = 0;
     /**
      * @description: 获取解码的帧数据（BGR格式）及视频信息
-     * @return long数组，分别为 [mat数据地址, 宽度, 高度, 时间戳(毫秒), 帧率, 码率, 总帧数]
+     * @return long数组，分别为 [mat数据地址, 宽度, 高度, 时间戳(毫秒), 帧率,
+     * 码率, 总帧数]
      *         - [0] BGR数据地址：需要调用free()释放
      *         - [1] 宽度：图像宽度（像素）
      *         - [2] 高度：图像高度（像素）
@@ -97,36 +96,39 @@ class IDecoder {
      * @param {string} video_path RTSP流地址(rtsp://)或本地视频文件路径
      * @param {int} is_mpp 是否使用MPP硬件解码（仅RTSP流，0=软解，1=硬解）
      * @param {int} interval 帧间隔（0=全部帧，1=跳帧）
+     * @param {int} timeout_frame 获取帧超时时间（毫秒）
      * @return 0成功，非0失败
      * @note 自动识别RTSP流和本地文件路径
      */
-    virtual int
-                   start_pull(string video_path, int is_mpp = 0, int interval = 1) = 0;
+    virtual int start_pull(string video_path,
+                           int    is_mpp           = 0,
+                           int    interval         = 1,
+                           int    timeout_frame_ms = 200) = 0;
     /**
      * @description: 停止视频拉取/读取
      * @return 0成功
      */
-    virtual int    stop()           = 0;
+    virtual int stop() = 0;
     /**
      * @description: 获取空帧次数（用于监控连接状态）
      * @return 空帧累计次数
      */
-    virtual int    get_null_times() = 0;
+    virtual int get_null_times() = 0;
     /**
      * @description: 获取当前视频源路径
      * @return RTSP地址或本地文件路径
      */
-    virtual string get_rtsp()       = 0;
+    virtual string get_rtsp() = 0;
     /**
      * @description: 获取视频帧率（FPS）
      * @return 帧率，RTSP流和本地文件均支持，失败返回0
      */
-    virtual double get_fps()        = 0;
+    virtual double get_fps() = 0;
     /**
      * @description: 获取视频码率（bps）
      * @return 码率（比特率/秒），RTSP流和本地文件均支持，失败返回0
      */
-    virtual int64_t get_bitrate()   = 0;
+    virtual int64_t get_bitrate() = 0;
     /**
      * @description: 获取视频总帧数
      * @return 总帧数，仅本地文件支持，RTSP流返回-1
