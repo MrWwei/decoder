@@ -49,7 +49,7 @@ void run(xtkj::IDecoder* decoder, int instance_id)
         int state_decoder = decoder->get_status();
         // std::cout << "Instance " << instance_id
         //           << " - Decoder State: " << state_decoder << std::endl;
-        continue;
+        // continue;
         count++;
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -276,10 +276,9 @@ int main(int argc, char* argv[])
                 printf("Instance %d - 启动成功\n", i);
             }
         }
-
         // 等待一些时间让流初始化
         printf("\n等待视频流初始化...\n");
-        std::this_thread::sleep_for(std::chrono::milliseconds(100000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 
         // 显示所有视频源的信息
         printf("\n========== 视频信息 ==========\n");
@@ -287,6 +286,8 @@ int main(int argc, char* argv[])
             double  fps          = decoders[i]->get_fps();
             int64_t bitrate      = decoders[i]->get_bitrate();
             int64_t total_frames = decoders[i]->get_total_frames();
+            int     frame_width  = decoders[i]->get_frame_width();
+            int     frame_height = decoders[i]->get_frame_height();
             // 解码器状态
             status = decoders[i]->get_status();
 
@@ -315,6 +316,7 @@ int main(int argc, char* argv[])
             else {
                 printf("总帧数: N/A (RTSP流)\n");
             }
+            printf("宽高%d %d\n", frame_width, frame_height);
         }
         printf("\n=================================\n\n");
 

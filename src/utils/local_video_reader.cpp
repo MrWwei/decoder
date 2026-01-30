@@ -1,7 +1,7 @@
 #include "local_video_reader.h"
 #include "decoder_utils.h"
-#include <opencv2/opencv.hpp>
 #include <iostream>
+#include <opencv2/opencv.hpp>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -49,6 +49,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
 
     if (avformat_find_stream_info(formatContext_, nullptr) < 0) {
         log_error("Cannot find stream information");
+        cleanup();  // 释放已分配的formatContext_
         return false;
     }
 
@@ -63,6 +64,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
 
     if (videoStreamIndex_ == -1) {
         log_error("No video stream found");
+        cleanup();  // 释放已分配的formatContext_
         return false;
     }
 
@@ -71,22 +73,26 @@ bool LocalVideoReader::open(const std::string& videoPath)
     const AVCodec* codec = avcodec_find_decoder(codecParameters->codec_id);
     if (codec == nullptr) {
         log_error("Decoder not found");
+        cleanup();  // 释放已分配的formatContext_
         return false;
     }
 
     codecContext_ = avcodec_alloc_context3(codec);
     if (codecContext_ == nullptr) {
         log_error("Cannot allocate decoder context");
+        cleanup();  // 释放已分配的formatContext_
         return false;
     }
 
     if (avcodec_parameters_to_context(codecContext_, codecParameters) < 0) {
         log_error("Cannot copy decoder parameters");
+        cleanup();  // 释放formatContext_和codecContext_
         return false;
     }
 
     if (avcodec_open2(codecContext_, codec, nullptr) < 0) {
         log_error("Cannot open decoder");
+        cleanup();  // 释放formatContext_和codecContext_
         return false;
     }
 
@@ -96,6 +102,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
 
     if (!frame_ || !frameRGB_ || !packet_) {
         log_error("Cannot allocate frames or packet");
+        cleanup();  // 释放所有已分配资源
         return false;
     }
 
@@ -111,6 +118,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
     // Get FPS
     AVRational frame_rate =
         formatContext_->streams[videoStreamIndex_]->avg_frame_rate;
+
     if (frame_rate.den != 0) {
         fps_ = av_q2d(frame_rate);
     }
@@ -119,8 +127,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
     }
 
     // Get bitrate
-    bitrate_ =
-        formatContext_->streams[videoStreamIndex_]->codecpar->bit_rate;
+    bitrate_ = formatContext_->streams[videoStreamIndex_]->codecpar->bit_rate;
     if (bitrate_ == 0 && formatContext_->bit_rate > 0) {
         bitrate_ = formatContext_->bit_rate;
     }
@@ -132,8 +139,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
             static_cast<int64_t>(duration * fps_ * time_base_ / 1000.0);
     }
     else if (formatContext_->streams[videoStreamIndex_]->nb_frames > 0) {
-        total_frames_ =
-            formatContext_->streams[videoStreamIndex_]->nb_frames;
+        total_frames_ = formatContext_->streams[videoStreamIndex_]->nb_frames;
     }
     else {
         total_frames_ = -1;
@@ -144,6 +150,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
     buffer_ = (uint8_t*)av_malloc(numBytes * sizeof(uint8_t));
     if (buffer_ == nullptr) {
         log_error("Cannot allocate buffer");
+        cleanup();  // 释放所有已分配资源
         return false;
     }
 
@@ -156,6 +163,7 @@ bool LocalVideoReader::open(const std::string& videoPath)
 
     if (swsContext_ == nullptr) {
         log_error("Cannot create conversion context");
+        cleanup();  // 释放所有已分配资源
         return false;
     }
 
@@ -217,12 +225,10 @@ bool LocalVideoReader::readFrame(cv::Mat& outMat)
 
                 // Calculate PTS in milliseconds
                 if (frame_->pts != AV_NOPTS_VALUE) {
-                    last_pts_ =
-                        static_cast<int64_t>(frame_->pts * time_base_);
+                    last_pts_ = static_cast<int64_t>(frame_->pts * time_base_);
                 }
                 else if (packet_->pts != AV_NOPTS_VALUE) {
-                    last_pts_ =
-                        static_cast<int64_t>(packet_->pts * time_base_);
+                    last_pts_ = static_cast<int64_t>(packet_->pts * time_base_);
                 }
                 else {
                     // If no PTS available, estimate based on frame count
@@ -305,20 +311,34 @@ int64_t LocalVideoReader::getTotalFrames() const
 
 void LocalVideoReader::cleanup()
 {
-    if (buffer_)
+    if (buffer_) {
         av_free(buffer_);
-    if (frameRGB_)
+        buffer_ = nullptr;
+    }
+    if (frameRGB_) {
         av_frame_free(&frameRGB_);
-    if (frame_)
+        frameRGB_ = nullptr;
+    }
+    if (frame_) {
         av_frame_free(&frame_);
-    if (packet_)
+        frame_ = nullptr;
+    }
+    if (packet_) {
         av_packet_free(&packet_);
-    if (codecContext_)
+        packet_ = nullptr;
+    }
+    if (codecContext_) {
         avcodec_free_context(&codecContext_);
-    if (formatContext_)
+        codecContext_ = nullptr;
+    }
+    if (formatContext_) {
         avformat_close_input(&formatContext_);
-    if (swsContext_)
+        formatContext_ = nullptr;
+    }
+    if (swsContext_) {
         sws_freeContext(swsContext_);
+        swsContext_ = nullptr;
+    }
     opened_ = false;
 }
 

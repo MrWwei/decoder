@@ -1,9 +1,9 @@
 #include "xtkj_decoder.h"
+#include "data_type.h"
 #include "decoder_internal.h"
 #include "decoder_utils.h"
-#include "local_video_reader.h"
-#include "data_type.h"
 #include "ffmpeg_decoder.h"
+#include "local_video_reader.h"
 #include "opencv2/opencv.hpp"
 #include "pullFramer.h"
 #include <atomic>
@@ -74,6 +74,14 @@ void Decoder::set_fps(double fps)
     fps_ = fps;
 }
 
+void Decoder::set_frame_height(int frame_height)
+{
+    frame_height_ = frame_height;
+}
+void Decoder::set_frame_width(int frame_width)
+{
+    frame_width_ = frame_width;
+}
 void Decoder::set_bitrate(int64_t bitrate)
 {
     bitrate_ = bitrate;
@@ -186,6 +194,16 @@ int64_t Decoder::get_total_frames()
     }
     // For RTSP streams, return -1 (not supported)
     return -1;
+}
+
+int Decoder::get_frame_height()
+{
+    return frame_height_;
+}
+
+int Decoder::get_frame_width()
+{
+    return frame_width_;
 }
 
 int Decoder::get_status()
@@ -418,7 +436,7 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
     }
 }
 void* YV12ToBGR24_OpenCV_FFMPEG(unsigned char* pYUV, int width, int height);
-int Decoder::get_null_times()
+int   Decoder::get_null_times()
 {
     return null_frame_times_;
 }
@@ -578,6 +596,12 @@ int Decoder::process_local_video(const char* path, std::promise<bool>& pro)
         log_info("Local video file opened, using synchronous blocking mode (no "
                  "cache, no frame drop)");
     }
+    fps_          = local_video_reader_->getFPS();
+    frame_width_  = local_video_reader_->getWidth();
+    frame_height_ = local_video_reader_->getHeight();
+    bitrate_      = local_video_reader_->getBitrate();
+    total_frames_ = local_video_reader_->getTotalFrames();
+
     decoder_status_.store(DECODER_STATUS_OPENED);
     pro.set_value(true);
 
@@ -619,10 +643,7 @@ void API_CALL on_mk_play_event_func(void*       user_data,
         log_info("SDKPlay started successfully");
 
         // Update decoder status to opened
-        if (ctx->decoder_instance) {
-            Decoder* decoder_obj = static_cast<Decoder*>(ctx->decoder_instance);
-            decoder_obj->set_status(DECODER_STATUS_OPENED);
-        }
+
         int i;
         for (i = 0; i < track_count; ++i) {
             if (mk_track_is_video(tracks[i])) {
@@ -640,6 +661,15 @@ void API_CALL on_mk_play_event_func(void*       user_data,
                     int bitrate = mk_track_bit_rate(tracks[i]);
                     if (bitrate > 0) {
                         decoder_obj->set_bitrate(static_cast<int64_t>(bitrate));
+                    }
+                    int frame_width  = mk_track_video_width(tracks[i]);
+                    int frame_height = mk_track_video_height(tracks[i]);
+                    decoder_obj->set_frame_height(frame_height);
+                    decoder_obj->set_frame_width(frame_width);
+                    if (ctx->decoder_instance) {
+                        Decoder* decoder_obj =
+                            static_cast<Decoder*>(ctx->decoder_instance);
+                        decoder_obj->set_status(DECODER_STATUS_OPENED);
                     }
                 }
 

@@ -58,6 +58,8 @@ class Decoder : public IDecoder {
     double            get_fps() override;
     int64_t           get_bitrate() override;
     int64_t           get_total_frames() override;
+    int               get_frame_width() override;
+    int               get_frame_height() override;
     int               get_status() override;
     void              set_loop_playback(bool loop) override;
 
@@ -65,6 +67,8 @@ class Decoder : public IDecoder {
     void set_fps(double fps);
     void set_bitrate(int64_t bitrate);
     void set_total_frames(int64_t frames);
+    void set_frame_width(int frame_width);
+    void set_frame_height(int frame_height);
     void set_status(int status);
 
     // Public access to synchronization primitives for callback functions
@@ -96,6 +100,8 @@ class Decoder : public IDecoder {
     double  fps_{0.0};
     int64_t bitrate_{0};
     int64_t total_frames_{-1};
+    int     frame_width_{0};
+    int     frame_height_{0};
 
     // Decoder status
     std::atomic<int> decoder_status_{DECODER_STATUS_IDLE};

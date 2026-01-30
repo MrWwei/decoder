@@ -30,6 +30,8 @@ VideoDecoder::VideoDecoder(int32_t codec_id)
     // 打开解码器
     if (avcodec_open2(dec_context, codec, NULL) < 0) {
         std::cerr << "Could not open codec\n";
+        avcodec_free_context(&dec_context);  // 释放已分配的context
+        dec_context = nullptr;
         return;
     }
     std::cout << "open codec success" << std::endl;
@@ -98,9 +100,8 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
     int ret   = avcodec_send_packet(dec_context, pkt);
     if (ret < 0) {
         av_packet_free(&pkt);
-        pkt = nullptr;
         // fprintf(stderr, "Error during decoding\n");
-        return buffer;
+        return nullptr;  // buffer is NULL at this point
     }
     cv::Mat outMat;
 
@@ -114,7 +115,8 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
         ret = avcodec_receive_frame(dec_context, frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
             av_frame_free(&frame);
-            return 0;
+            av_packet_free(&pkt);  // 释放packet
+            return nullptr;
         }
         else if (ret < 0) {
             fprintf(stderr, "Error while decoding\n");

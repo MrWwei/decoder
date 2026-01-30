@@ -134,6 +134,8 @@ class IDecoder {
      * @return 总帧数，仅本地文件支持，RTSP流返回-1
      */
     virtual int64_t get_total_frames() = 0;
+    virtual int     get_frame_height() = 0;
+    virtual int     get_frame_width()  = 0;
     /**
      * @description: 获取解码器打开状态
      * @return DecoderStatus枚举值：

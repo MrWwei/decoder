@@ -135,6 +135,8 @@ Java_cn_xtkj_jni_capture_ServerVideoDecoder_takeInfo(JNIEnv* env,
         double  fps          = decoder->get_fps();
         int64_t bitrate      = decoder->get_bitrate();
         int64_t total_frames = decoder->get_total_frames();
+        int     frame_width  = decoder->get_frame_width();
+        int     frame_height = decoder->get_frame_height();
 
         // 查找VideoInfo类
         jclass videoInfoClass =
@@ -179,6 +181,22 @@ Java_cn_xtkj_jni_capture_ServerVideoDecoder_takeInfo(JNIEnv* env,
         if (frameLenField != nullptr) {
             env->SetIntField(videoInfo, frameLenField,
                              static_cast<jint>(total_frames));
+        }
+
+        // 设置frameWidth字段 (int类型)
+        jfieldID frameWidthField =
+            env->GetFieldID(videoInfoClass, "frameWidth", "I");
+        if (frameWidthField != nullptr) {
+            env->SetIntField(videoInfo, frameWidthField,
+                             static_cast<jint>(frame_width));
+        }
+
+        // 设置frameHeight字段 (int类型)
+        jfieldID frameHeightField =
+            env->GetFieldID(videoInfoClass, "frameHeight", "I");
+        if (frameHeightField != nullptr) {
+            env->SetIntField(videoInfo, frameHeightField,
+                             static_cast<jint>(frame_height));
         }
 
         return videoInfo;
