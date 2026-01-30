@@ -29,8 +29,8 @@ include_directories(${ThirdParty}/opencv-4.5.4_video/build/install/include/openc
 # include_directories( ${ThirdParty}/librga/include)
 
 # 设置ffmpeg依赖库及头文件所在目录，并存进指定变量                                                                      
-set(ffmpeg_libs_DIR ${ThirdParty}/FFmpeg-n6.0/install/lib)                                                              
-set(ffmpeg_headers_DIR ${ThirdParty}/FFmpeg-n6.0/install/include)                                                       
+set(ffmpeg_libs_DIR ${ThirdParty}/FFmpeg-n6.0.1/install/lib)                                                              
+set(ffmpeg_headers_DIR ${ThirdParty}/FFmpeg-n6.0.1/install/include)                                                       
 #对于find_package找不到的外部依赖库，可以用add_library添加                                                              
 # SHARED表示添加的是动态库                                                                                              
 # IMPORTED表示是引入已经存在的动态库                                                                                    
@@ -60,7 +60,7 @@ set(ZLMEDIAKIT_LIBS ${ZLMEDIAKIT_PATH}/lib/libmk_api.so)
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/src SRC_DIR)
 aux_source_directory(${PROJECT_SOURCE_DIR}/src/utils SRC_DIR)
-set(sdk_target_name videoDecoder_ubuntu_SDK_V2.4)
+set(sdk_target_name videoDecoder_ubuntu_x86_SDK_V2.4)
 add_library(${sdk_target_name} SHARED ${SRC_DIR})
 target_link_libraries(${sdk_target_name}
      opencv_lib
@@ -84,7 +84,7 @@ target_link_libraries(${PROJECT_NAME}
 include_directories(${ThirdParty}/jdk1.8.0_381/include)
 include_directories(${ThirdParty}/jdk1.8.0_381/include/linux)
 
-set(jni_name_rtsp videoDecoder_ubuntu_SDK2.4_JNI_V2.4)
+set(jni_name_rtsp videoDecoder_ubuntu_x86_SDK2.4_JNI_V2.4)
 add_library(${jni_name_rtsp} SHARED
 jni/cn_xtkj_jni_capture_ServerVideoDecoder.cpp
 )

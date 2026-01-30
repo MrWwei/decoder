@@ -214,8 +214,9 @@ Java_cn_xtkj_jni_capture_ServerVideoDecoder_decodeToMatRef(JNIEnv* env,
         vector<long long> mat_info = decoder->get_frame();
         if (mat_info.empty()) {
             // 超时或错误
-            std::cout << "jni解码器 " << handleid << " 获取帧数据超时或错误。"
-                      << std::endl;
+            // std::cout << "jni解码器 " << handleid << "
+            // 获取帧数据超时或错误。"
+            //           << std::endl;
             return nullptr;
         }
         cv::Mat image =
