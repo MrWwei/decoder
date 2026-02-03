@@ -38,11 +38,18 @@ extern "C" {
 #    undef log_info
 #endif
 
+using namespace xtkj;
+
+// Define static constexpr members (required for ODR-usage in C++11/14)
+constexpr int DecoderConfig::MAX_STACK_SIZE;
+constexpr int DecoderConfig::DEFAULT_TIMEOUT_MS;
+constexpr int DecoderConfig::MAX_RETRY_TIMES;
+constexpr int DecoderConfig::MAX_RECONNECT_TIMES;
+constexpr int DecoderConfig::RECONNECT_DELAY_MS;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-using namespace xtkj;
 
 // Decoder class implementation
 Decoder::Decoder()
@@ -54,6 +61,8 @@ Decoder::Decoder()
 Decoder::~Decoder()
 {
     stop();
+    stop_monitor_thread();
+
     if (worker_ && worker_->joinable()) {
         worker_->join();
     }
@@ -104,17 +113,6 @@ void Decoder::set_status(int status)
     decoder_status_.store(status);
 }
 
-void onGetFrame(const FrameData::Ptr& frame, void* userData1);
-// void mpp_decoder_frame_callback(void*    userdata,
-//                                 int      width_stride,
-//                                 int      height_stride,
-//                                 int      width,
-//                                 int      height,
-//                                 int      format,
-//                                 int      fd,
-//                                 void*    data,
-//                                 uint64_t frame_pts,
-//                                 size_t   data_size);
 void onGetFrame(const FrameData::Ptr& frame, void* userData1);
 
 // Helper logging functions
@@ -287,6 +285,12 @@ int Decoder::start_pull(string video_path,
     if (!result) {
         decoder_status_.store(DECODER_STATUS_FAILED);
     }
+
+    // 启动监测线程，用于监控视频流状态
+    if (result) {
+        start_monitor_thread();
+    }
+
     return result ? 0 : -1;
 }
 int Decoder::start_pull()
@@ -348,25 +352,27 @@ int           Decoder::process_video(app_context_t*      ctx,
     // Set decoder instance pointer for callback to update fps/bitrate
     ctx->decoder_instance = static_cast<void*>(this);
 
-    bool reconnect_flag = false;
-    ctx->url            = string(path);
-    ctx->player         = mk_player_create();
+    bool reconnect_flag  = false;
+    ctx->url             = string(path);
+    ctx->skip_next_frame = false;
+    ctx->player          = mk_player_create();
     mk_player_set_on_result((mk_player)ctx->player, on_mk_play_event_func, ctx);
     mk_player_set_on_shutdown((mk_player)ctx->player, on_mk_shutdown_func, ctx);
-    mk_player_set_option((mk_player)ctx->player, "rtp_type", "0");
+    // mk_player_set_option((mk_player)ctx->player, "rtp_type", "0");
     mk_player_set_option((mk_player)ctx->player, "protocol_timeout_ms",
                          std::to_string(timeout_open_ms_).c_str());
+    int media_timeout_ms = 1000;
     mk_player_set_option((mk_player)ctx->player, "media_timeout_ms",
-                         std::to_string(timeout_frame_ms_).c_str());
+                         std::to_string(media_timeout_ms).c_str());
     mk_player_set_option((mk_player)ctx->player, "wait_track_ready", "true");
 
     mk_player_play((mk_player)ctx->player, path);
     printf("mk player started to play: %s\n", path);
+
     pro.set_value(true);
-    // ctx->player = player;
 
     while (!stop_.load()) {
-        printf("Decoder keep alive...\n");
+        // printf("Decoder keep alive...\n");
         this_thread::sleep_for(chrono::milliseconds(1000));
         // mk_player_play((mk_player)ctx->player, path);
     }
@@ -379,8 +385,7 @@ int           Decoder::process_video(app_context_t*      ctx,
 
     return 0;
 }
-void* YV12ToBGR24_OpenCV_FFMPEG(unsigned char* pYUV, int width, int height);
-void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
+void onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
 {
     app_context_t* ctx = (app_context_t*)userData1;
 
@@ -392,17 +397,8 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
     std::shared_ptr<VideoDecoder>* decoderPtr =
         static_cast<std::shared_ptr<VideoDecoder>*>(ctx->decoder_ffmpeg);
     auto decoder = *decoderPtr;
-    if (ctx->is_interval) {
-        if (ctx->skip_next_frame) {
-            ctx->skip_next_frame = false;  // 翻转标志，下一帧解码
-            // printf("rtsp跳过一帧\n");
-            return;  // 跳过当前帧
-        }
-        ctx->skip_next_frame = true;  // 翻转标志，下一帧跳过
-    }
-    // 跳帧处理：当 is_interval=true 时，交替跳过帧（解码一帧，跳过一帧）
-    // 使用布尔标志避免计数器在长时间RTSP流中溢出
 
+    // 跳帧逻辑已移到on_track_frame_out中处理，此处直接解码
     size_t data_size = 0;
     if (decoder) {
         int32_t pixel_width  = 0;
@@ -414,6 +410,18 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
                                  pixel_width, pixel_height, data_size);
         if (bgr_data == nullptr) {
             return;
+        }
+        // 跳帧实现
+        if (ctx->is_interval && ctx->skip_next_frame) {
+            // printf("Skipping frame pts=%llu\n", framePtr->pts());
+            // 跳过当前帧
+            ctx->skip_next_frame = false;  // 重置跳帧标志
+            free(bgr_data);                // 释放解码数据
+            return;
+        }
+        else if (ctx->is_interval && !ctx->skip_next_frame) {
+            // 本帧不跳，下一帧跳
+            ctx->skip_next_frame = true;
         }
 
         image_frame_t* frame = new image_frame_t();
@@ -459,8 +467,7 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
         }
     }
 }
-void* YV12ToBGR24_OpenCV_FFMPEG(unsigned char* pYUV, int width, int height);
-int   Decoder::get_null_times()
+int Decoder::get_null_times()
 {
     return null_frame_times_;
 }
@@ -693,6 +700,9 @@ int Decoder::stop()
     stop_.store(true);
     app_ctx_.stop = true;
 
+    // Stop monitor thread
+    stop_monitor_thread();
+
     // Stop local video reader first
     if (local_video_reader_) {
         local_video_reader_->stopReading();
@@ -703,12 +713,6 @@ int Decoder::stop()
 
     this_thread::sleep_for(chrono::milliseconds(200));
 
-    // Stop monitor thread first
-    if (monitor_thread_ && monitor_thread_->joinable()) {
-        monitor_thread_->join();
-        monitor_thread_.reset();
-    }
-
     // Properly join and reset the worker thread
     if (worker_ != nullptr && worker_->joinable()) {
         worker_->join();
@@ -718,10 +722,6 @@ int Decoder::stop()
 
     // Clear all remaining frames in stack
     clear_frame_stack(this);
-    // Update status to idle
-
-    // log_info("Decoder stopped for instance: " +
-    //          std::to_string(app_ctx_.instance_index));
     return 0;
 }
 
@@ -735,6 +735,132 @@ void xtkj::releaseDecoder(IDecoder* pIDecoder)
     delete pIDecoder;
     pIDecoder = nullptr;
 }
+
+// 启动监测线程
+void Decoder::start_monitor_thread()
+{
+    // 如果监测线程已经在运行，先停止
+    if (monitor_running_.load()) {
+        stop_monitor_thread();
+    }
+
+    monitor_running_.store(true);
+    monitor_thread_ =
+        std::make_shared<std::thread>(&Decoder::monitor_stream_status, this);
+    log_info("Stream monitor thread started");
+}
+
+// 停止监测线程
+void Decoder::stop_monitor_thread()
+{
+    if (monitor_running_.load()) {
+        monitor_running_.store(false);
+
+        if (monitor_thread_ && monitor_thread_->joinable()) {
+            monitor_thread_->join();
+            monitor_thread_.reset();
+        }
+        log_info("Stream monitor thread stopped");
+    }
+}
+
+// 监测线程主函数
+void Decoder::monitor_stream_status()
+{
+    log_info("Stream monitoring started for: " + rtsp_url_);
+
+    while (monitor_running_.load()) {
+        // 每隔2秒检查一次状态
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+        if (!monitor_running_.load()) {
+            break;
+        }
+
+        // 检查解码器状态
+        int current_status = decoder_status_.load();
+
+        // 如果状态为失败，且设置了自动重连，则尝试重新打开流
+        if (current_status == DECODER_STATUS_FAILED) {
+            if (app_ctx_.auto_reopen && keep_reopen_) {
+                log_info(
+                    "Detected FAILED status, attempting to reopen stream: " +
+                    rtsp_url_);
+
+                // 避免重复重连
+                std::lock_guard<std::mutex> lock(reconnect_mutex_);
+
+                // 记录当前配置
+                std::string video_path    = rtsp_url_;
+                int         is_mpp        = app_ctx_.is_mpp;
+                int         interval      = app_ctx_.is_interval;
+                int         timeout_frame = timeout_frame_ms_;
+                bool        auto_reopen   = app_ctx_.auto_reopen;
+
+                // 停止当前流（但不停止监测线程）
+                stop_.store(true);
+                app_ctx_.stop = true;
+
+                // 清理worker线程
+                if (worker_ && worker_->joinable()) {
+                    worker_->join();
+                    worker_.reset();
+                }
+
+                // 清理帧栈
+                clear_frame_stack(this);
+
+                // 等待一段时间再重连
+                std::this_thread::sleep_for(std::chrono::milliseconds(
+                    DecoderConfig::RECONNECT_DELAY_MS));
+
+                if (!monitor_running_.load()) {
+                    break;
+                }
+
+                // 重新初始化状态
+                stop_.store(false);
+                app_ctx_.stop = false;
+                decoder_status_.store(DECODER_STATUS_OPENING);
+
+                // 重新启动拉流
+                std::promise<bool> pro;
+
+                if (is_local_file_) {
+                    log_info("Reopening local video file: " + video_path);
+                    worker_ = std::make_shared<std::thread>(
+                        &Decoder::process_local_video, this, video_path.c_str(),
+                        std::ref(pro));
+                }
+                else {
+                    log_info("Reopening RTSP stream: " + video_path);
+                    worker_ = std::make_shared<std::thread>(
+                        &Decoder::process_video, this, &app_ctx_,
+                        video_path.c_str(), std::ref(pro));
+                }
+
+                bool result = pro.get_future().get();
+                if (result) {
+                    log_info("Successfully reopened stream: " + video_path);
+                }
+                else {
+                    log_error("Failed to reopen stream: " + video_path);
+                    decoder_status_.store(DECODER_STATUS_FAILED);
+                }
+            }
+            else {
+                log_info("Stream failed but auto-reopen is disabled");
+                // 如果不自动重连，退出监测循环
+                if (!keep_reopen_) {
+                    break;
+                }
+            }
+        }
+    }
+
+    log_info("Stream monitoring stopped");
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -87,95 +87,92 @@ void run(xtkj::IDecoder* decoder,
 
     while (keep_flag && g_running.load()) {
         int state_decoder = decoder->get_status();
-        // printf("Instance %d - 解码器状态: %d\n", instance_id, state_decoder);
-        // auto start = std::chrono::high_resolution_clock::now();
+        printf("Instance %d - 解码器状态: %d\n", instance_id, state_decoder);
+        auto start = std::chrono::high_resolution_clock::now();
 
-        // vector<long long> mat_info = decoder->get_frame();
+        vector<long long> mat_info = decoder->get_frame();
 
-        // if (mat_info.empty()) {
-        //     empty_count++;
-        //     // if (empty_count > 100) {
-        //     //     printf("Instance %d - 连续空帧超过100次，停止处理\n",
-        //     //            instance_id);
-        //     //     break;
-        //     // }
-        //     continue;
-        // }
+        if (mat_info.empty()) {
+            empty_count++;
+            // if (empty_count > 100) {
+            //     printf("Instance %d - 连续空帧超过100次，停止处理\n",
+            //            instance_id);
+            //     break;
+            // }
+            continue;
+        }
 
-        // empty_count = 0;
-        // count++;  // 只在获取到有效帧时才计数
+        empty_count = 0;
+        count++;  // 只在获取到有效帧时才计数
 
-        // cv::Mat mat =
-        //     cv::Mat(mat_info[2], mat_info[1], CV_8UC3,
-        //     (cv::Mat*)mat_info[0]);
+        cv::Mat mat =
+            cv::Mat(mat_info[2], mat_info[1], CV_8UC3, (cv::Mat*)mat_info[0]);
 
-        // // 初始化VideoWriter（首次获取到帧时）
-        // if (save_video && !writer_initialized && !mat.empty()) {
-        //     std::string output_filename = "out_frames/output_instance_" +
-        //                                   std::to_string(instance_id) +
-        //                                   ".mp4";
+        // 初始化VideoWriter（首次获取到帧时）
+        if (save_video && !writer_initialized && !mat.empty()) {
+            std::string output_filename = "out_frames/output_instance_" +
+                                          std::to_string(instance_id) + ".mp4";
 
-        //     // 获取视频信息
-        //     double fps = decoder->get_fps();
-        //     if (fps <= 0)
-        //         fps = 25.0;  // 默认25fps
+            // 获取视频信息
+            double fps = decoder->get_fps();
+            if (fps <= 0)
+                fps = 25.0;  // 默认25fps
 
-        //     int frame_width  = mat.cols;
-        //     int frame_height = mat.rows;
+            int frame_width  = mat.cols;
+            int frame_height = mat.rows;
 
-        //     // 使用H.264编码器 - avc1更兼容，支持更广泛的播放器
-        //     int fourcc = cv::VideoWriter::fourcc('a', 'v', 'c', '1');
+            // 使用H.264编码器 - avc1更兼容，支持更广泛的播放器
+            int fourcc = cv::VideoWriter::fourcc('a', 'v', 'c', '1');
 
-        //     video_writer.open(output_filename, fourcc, fps,
-        //                       cv::Size(frame_width, frame_height), true);
+            video_writer.open(output_filename, fourcc, fps,
+                              cv::Size(frame_width, frame_height), true);
 
-        //     if (video_writer.isOpened()) {
-        //         writer_initialized = true;
-        //         // printf(
-        //         //     "Instance %d - 视频写入器已初始化: %s (%.2f fps,
-        //         //     %dx%d)\n", instance_id, output_filename.c_str(), fps,
-        //         //     frame_width, frame_height);
-        //     }
-        //     else {
-        //         printf("Instance %d - 警告：无法初始化视频写入器\n",
-        //                instance_id);
-        //     }
-        // }
+            if (video_writer.isOpened()) {
+                writer_initialized = true;
+                // printf(
+                //     "Instance %d - 视频写入器已初始化: %s (%.2f fps,
+                //     %dx%d)\n", instance_id, output_filename.c_str(), fps,
+                //     frame_width, frame_height);
+            }
+            else {
+                printf("Instance %d - 警告：无法初始化视频写入器\n",
+                       instance_id);
+            }
+        }
 
-        // // 写入视频帧
-        // if (save_video && writer_initialized && !mat.empty()) {
-        //     video_writer.write(mat);
-        // }
+        // 写入视频帧
+        if (save_video && writer_initialized && !mat.empty()) {
+            video_writer.write(mat);
+        }
 
-        // // 保存图片（可选）
-        // if (save_images) {
-        //     cv::imwrite("out_frames/output_instance_" +
-        //                     std::to_string(instance_id) + "_frame_" +
-        //                     std::to_string(count) + ".jpg",
-        //                 mat);
-        // }
+        // 保存图片（可选）
+        if (save_images) {
+            cv::imwrite("out_frames/output_instance_" +
+                            std::to_string(instance_id) + "_frame_" +
+                            std::to_string(count) + ".jpg",
+                        mat);
+        }
 
-        // // 释放内存
-        // if (mat_info[0] > 0)
-        //     free(reinterpret_cast<void*>(mat_info[0]));
+        // 释放内存
+        if (mat_info[0] > 0)
+            free(reinterpret_cast<void*>(mat_info[0]));
 
-        // auto end = std::chrono::high_resolution_clock::now();
-        // auto duration =
-        //     std::chrono::duration_cast<std::chrono::milliseconds>(end -
-        //     start)
-        //         .count();
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration =
+            std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+                .count();
 
-        // if (count % 100 == 0) {
-        //     printf("Instance %d - 已处理 %d 帧 (处理时间: %lld ms)\n",
-        //            instance_id, count, duration);
-        // }
+        if (count % 100 == 0) {
+            printf("Instance %d - 已处理 %d 帧 (处理时间: %lld ms)\n",
+                   instance_id, count, duration);
+        }
 
-        // // 检查是否达到最大帧数
-        // if (max_frames > 0 && count >= max_frames) {
-        //     printf("Instance %d - 达到最大帧数 %d，停止处理\n", instance_id,
-        //            max_frames);
-        //     keep_flag = false;
-        // }
+        // 检查是否达到最大帧数
+        if (max_frames > 0 && count >= max_frames) {
+            printf("Instance %d - 达到最大帧数 %d，停止处理\n", instance_id,
+                   max_frames);
+            keep_flag = false;
+        }
     }
 
     // 释放VideoWriter
@@ -412,7 +409,7 @@ int main(int argc, char* argv[])
 
             printf("解码器状态： %d\n", status);
             bool auto_reopen = true;
-            int  interval    = 1;  // 帧间隔（0=全部帧，1=跳帧）
+            int  interval    = 0;  // 帧间隔（0=全部帧，1=跳帧）
             int  ret = decoders[i]->start_pull(video_paths[i], 0, interval,
                                                timeout_ms, auto_reopen);
             if (ret != 0) {
@@ -424,7 +421,7 @@ int main(int argc, char* argv[])
         }
         // 等待一些时间让流初始化
         printf("\n等待视频流初始化...\n");
-        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(300000));
 
         // 显示所有视频源的信息
         printf("\n========== 视频信息 ==========\n");

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -30,6 +31,7 @@ Java_cn_xtkj_jni_capture_ServerVideoDecoder_initResource(JNIEnv* env,
     int handle = -1;
     for (int i = 1; i <= instanceNum; i++) {
         if (decoders.count(i) < 1) {
+            // int ret = decoder->init(10000);
             int ret = decoder->init(timeOutSeconds * 1000);
             if (ret < 0)
                 return ret;
@@ -80,6 +82,8 @@ JNIEXPORT jint JNICALL Java_cn_xtkj_jni_capture_ServerVideoDecoder_open(
     const char* rtspurl_cs  = env->GetStringUTFChars(rtspurl, NULL);
     int         ret         = decoder->start_pull(rtspurl_cs, 0, interval,
                                                   takeMatTimeOutMilliseconds, auto_reopen);
+    // std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+
     env->ReleaseStringUTFChars(rtspurl, rtspurl_cs);
     return ret;
 }

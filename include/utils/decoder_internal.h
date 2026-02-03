@@ -19,9 +19,11 @@ namespace xtkj {
 // Configuration structure
 struct DecoderConfig
 {
-    static constexpr int MAX_STACK_SIZE     = 1;
-    static constexpr int DEFAULT_TIMEOUT_MS = 10000;
-    static constexpr int MAX_RETRY_TIMES    = 50;
+    static constexpr int MAX_STACK_SIZE      = 1;
+    static constexpr int DEFAULT_TIMEOUT_MS  = 10000;
+    static constexpr int MAX_RETRY_TIMES     = 50;
+    static constexpr int MAX_RECONNECT_TIMES = 20;   // 最大重连次数
+    static constexpr int RECONNECT_DELAY_MS = 3000;  // 重连延迟（毫秒）
 };
 
 typedef struct
@@ -87,14 +89,25 @@ class Decoder : public IDecoder {
     std::atomic<bool> stop_{false};
     std::atomic<int>  reopen_times_{0};
 
+    // Reconnection control
+    std::atomic<bool>            is_reconnecting_{false};
+    std::atomic<int>             reconnect_count_{0};
+    std::shared_ptr<std::thread> reconnect_thread_;
+
+    // Stream monitoring thread
+    std::shared_ptr<std::thread> monitor_thread_;
+    std::atomic<bool>            monitor_running_{false};
+    void                         start_monitor_thread();
+    void                         stop_monitor_thread();
+    void                         monitor_stream_status();
+
   private:
     std::atomic<int> null_frame_times_{0};
     int              failed_times_{DecoderConfig::MAX_RETRY_TIMES};
 
     // Stream monitoring
-    std::shared_ptr<std::thread> monitor_thread_;
-    std::atomic<int64_t>         last_frame_time_{0};
-    std::mutex                   reconnect_mutex_;
+    std::atomic<int64_t> last_frame_time_{0};
+    std::mutex           reconnect_mutex_;
 
     std::shared_ptr<VideoDecoder>     decoder_soft_ = nullptr;
     std::shared_ptr<PullFramer>       puller_ = PullFramer::CreateShared();
