@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <ctime>
 #include <fstream>
 #include <future>
 #include <queue>
@@ -47,6 +48,7 @@ using namespace xtkj;
 Decoder::Decoder()
 {
     memset(&app_ctx_, 0, sizeof(app_context_t));
+    mk_player_ = nullptr;
 }
 
 Decoder::~Decoder()
@@ -85,6 +87,11 @@ void Decoder::set_frame_width(int frame_width)
 void Decoder::set_bitrate(int64_t bitrate)
 {
     bitrate_ = bitrate;
+}
+
+void Decoder::set_keep_reopen(bool keep_reopen)
+{
+    keep_reopen_ = keep_reopen;
 }
 
 void Decoder::set_total_frames(int64_t frames)
@@ -216,10 +223,28 @@ void Decoder::set_loop_playback(bool loop)
     loop_local_video_ = loop;
 }
 
+void Decoder::set_auto_reopen(bool auto_reopen)
+{
+    app_ctx_.auto_reopen = auto_reopen;
+    log_info(std::string("Auto-reopen set to: ") +
+             (auto_reopen ? "enabled" : "disabled"));
+}
+
+bool Decoder::get_auto_reopen()
+{
+    return app_ctx_.auto_reopen;
+}
+
+bool Decoder::get_keep_reopen()
+{
+    return keep_reopen_;
+}
+
 int Decoder::start_pull(string video_path,
                         int    is_mpp,
                         int    interval,
-                        int    timeout_frame_ms)
+                        int    timeout_frame_ms,
+                        bool   auto_reopen)
 {
     // Check if already running, stop first
     if (worker_ && worker_->joinable()) {
@@ -232,6 +257,7 @@ int Decoder::start_pull(string video_path,
     app_ctx_.stop        = false;
     app_ctx_.is_mpp      = is_mpp;
     app_ctx_.is_interval = interval;
+    app_ctx_.auto_reopen = auto_reopen;
 
     rtsp_url_ = video_path;
 
@@ -288,6 +314,8 @@ int Decoder::start_pull()
     if (!result) {
         decoder_status_.store(DECODER_STATUS_FAILED);
     }
+    this_thread::sleep_for(chrono::milliseconds(3000));
+
     return result ? 0 : -1;
 }
 void API_CALL on_mk_play_event_func(void*       user_data,
@@ -320,38 +348,35 @@ int           Decoder::process_video(app_context_t*      ctx,
     // Set decoder instance pointer for callback to update fps/bitrate
     ctx->decoder_instance = static_cast<void*>(this);
 
-    bool      reconnect_flag = false;
-    mk_player player         = mk_player_create();
-
-    mk_player_set_on_result(player, on_mk_play_event_func, ctx);
-    mk_player_set_on_shutdown(player, on_mk_shutdown_func, ctx);
-    mk_player_set_option(player, "rtp_type", "0");
-    mk_player_set_option(player, "protocol_timeout_ms",
+    bool reconnect_flag = false;
+    ctx->url            = string(path);
+    ctx->player         = mk_player_create();
+    mk_player_set_on_result((mk_player)ctx->player, on_mk_play_event_func, ctx);
+    mk_player_set_on_shutdown((mk_player)ctx->player, on_mk_shutdown_func, ctx);
+    mk_player_set_option((mk_player)ctx->player, "rtp_type", "0");
+    mk_player_set_option((mk_player)ctx->player, "protocol_timeout_ms",
                          std::to_string(timeout_open_ms_).c_str());
-    mk_player_set_option(player, "media_timeout_ms",
+    mk_player_set_option((mk_player)ctx->player, "media_timeout_ms",
                          std::to_string(timeout_frame_ms_).c_str());
-    mk_player_set_option(player, "wait_track_ready", "true");
+    mk_player_set_option((mk_player)ctx->player, "wait_track_ready", "true");
 
-    std::cout << "timeout_open_ms_: " << timeout_open_ms_ << std::endl;
-    std::cout << "timeout_frame_ms_: " << timeout_frame_ms_ << std::endl;
-    // mk_player_set_option(player, "beat_interval_ms", "1000");
-
-    mk_player_play(player, path);
-    // if (play_ret != 0) {
-    //     // log_error("Failed to start player for: " + std::string(path));
-    // }
+    mk_player_play((mk_player)ctx->player, path);
+    printf("mk player started to play: %s\n", path);
     pro.set_value(true);
+    // ctx->player = player;
 
     while (!stop_.load()) {
-        this_thread::sleep_for(chrono::milliseconds(10));
+        printf("Decoder keep alive...\n");
+        this_thread::sleep_for(chrono::milliseconds(1000));
+        // mk_player_play((mk_player)ctx->player, path);
     }
 
-    this_thread::sleep_for(chrono::milliseconds(1000));
-    if (player) {
-        // log_info("Releasing player");
-        mk_player_release(player);
+    // 立即释放player，不再等待
+    if (ctx->player) {
+        mk_player_release((mk_player)ctx->player);
+        // printf("mk player released!!!\n");
     }
-    this_thread::sleep_for(chrono::milliseconds(1000));
+
     return 0;
 }
 void* YV12ToBGR24_OpenCV_FFMPEG(unsigned char* pYUV, int width, int height);
@@ -370,7 +395,7 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
     if (ctx->is_interval) {
         if (ctx->skip_next_frame) {
             ctx->skip_next_frame = false;  // 翻转标志，下一帧解码
-            // printf("跳过一帧\n");
+            // printf("rtsp跳过一帧\n");
             return;  // 跳过当前帧
         }
         ctx->skip_next_frame = true;  // 翻转标志，下一帧跳过
@@ -382,14 +407,12 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
     if (decoder) {
         int32_t pixel_width  = 0;
         int32_t pixel_height = 0;
-        int32_t pixel_format = 0;
 
-        // dstYUV is allocated by decoder, ownership transferred to frame
-        auto dstYUV =
-            decoder->decode(framePtr->data(), framePtr->size(), pixel_width,
-                            pixel_height, pixel_format, data_size);
-        if (dstYUV == nullptr) {
-            // // log_error("Failed to decode frame");
+        // 直接解码为BGR，避免YUV中间拷贝和转换
+        auto bgr_data =
+            decoder->decodeToBGR(framePtr->data(), framePtr->size(),
+                                 pixel_width, pixel_height, data_size);
+        if (bgr_data == nullptr) {
             return;
         }
 
@@ -397,7 +420,8 @@ void  onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
         frame->height        = pixel_height;
         frame->width         = pixel_width;
         frame->data_size     = data_size;
-        frame->virt_addr     = dstYUV;  // Transfer ownership to frame
+        frame->virt_addr     = bgr_data;  // 现在存储的是BGR数据
+        frame->format        = 0;         // BGR format
 
         uint64_t pts_cur = framePtr->pts() * 1000;
         ctx->frame_pts += pts_cur;
@@ -450,36 +474,23 @@ vector<long long> Decoder::get_frame()
             return {};
         }
 
-        cv::Mat frame_mat;
-        if (!local_video_reader_->readFrame(frame_mat)) {
+        int    frame_width  = 0;
+        int    frame_height = 0;
+        size_t data_size    = 0;
+
+        // 直接获取BGR数据指针，无需memcpy
+        unsigned char* bgr_data = local_video_reader_->readFrameDirect(
+            frame_width, frame_height, data_size);
+
+        if (bgr_data == nullptr) {
             log_error("Failed to read frame from local video file");
             return {};
         }
 
-        // Allocate memory for BGR data
-        int            data_size = frame_mat.total() * frame_mat.elemSize();
-        unsigned char* bgr_data  = (unsigned char*)malloc(data_size);
-        if (bgr_data == nullptr) {
-            log_error("Failed to allocate memory for frame data");
-            return {};
-        }
-
-        memcpy(bgr_data, frame_mat.data, data_size);
-
-        // Get actual video frame PTS timestamp (milliseconds)
-        // int64_t frame_pts = local_video_reader_->getLastPTS();
-
-        // Get video info
-        double  fps          = local_video_reader_->getFPS();
-        int64_t bitrate      = local_video_reader_->getBitrate();
-        int64_t total_frames = local_video_reader_->getTotalFrames();
-
         vector<long long> mat_info = {
-            (long long)bgr_data, frame_mat.cols, frame_mat.rows,
-            // (long long)(fps),        // FPS * 100 (e.g., 3000 = 30.00fps)
-            // (long long)bitrate/1000000.0,            // [5] Bitrate in bps
-            // (long long)total_frames,        // [6] Total frames
-            // (long long)frame_pts          // [3] PTS timestamp
+            (long long)bgr_data,
+            frame_width,
+            frame_height,
         };
 
         null_frame_times_.store(0);
@@ -496,26 +507,6 @@ vector<long long> Decoder::get_frame()
             stack_cond_.notify_all();
             lock.unlock();
 
-            int null_times = null_frame_times_.fetch_add(1) + 1;
-            if (null_times > failed_times_) {
-                // Max retry times reached, mark as failed
-                // Let upper layer handle reconnection to avoid recursion risks
-                std::cout << "[WARNING] Max retry times reached (" << null_times
-                          << "), connection may be lost. Call stop() and "
-                             "start_pull() to reconnect."
-                          << std::endl;
-                decoder_status_.store(DECODER_STATUS_FAILED);
-                stop();
-                start_pull();
-
-                int           reopen_count = reopen_times_.fetch_add(1) + 1;
-                std::ofstream f("reopened_log.log", std::ios::app);
-                if (f.is_open()) {
-                    f << "Connection lost, retry count: " << reopen_count
-                      << ", null_times: " << null_times << std::endl;
-                    f.close();
-                }
-            }
             return {};
         }
 
@@ -524,48 +515,27 @@ vector<long long> Decoder::get_frame()
         stack_cond_.notify_all();
     }
 
-    // For RTSP streams, convert YUV to BGR
-    void* mdata = nullptr;
-    if (app_ctx_.is_mpp) {
-        mdata = YV12ToBGR24_OpenCV((unsigned char*)frame->virt_addr,
-                                   frame->width, frame->height);
-    }
-    else {
-        mdata = YV12ToBGR24_OpenCV_FFMPEG((unsigned char*)frame->virt_addr,
-                                          frame->width, frame->height);
-    }
+    // frame->virt_addr 现在已经是BGR数据，无需再转换
+    void* bgr_data = frame->virt_addr;
 
-    // Check if conversion succeeded
-    if (mdata == nullptr) {
-        log_error("Failed to convert YUV to BGR");
-        if (frame->virt_addr) {
-            free(frame->virt_addr);
-        }
+    if (bgr_data == nullptr) {
+        log_error("Frame data is null");
         delete frame;
         return {};
     }
 
-    // Get video info from cached values
-    // double fps = get_fps();
-    // int64_t bitrate = get_bitrate();
-    // int64_t total_frames = get_total_frames();
-
     vector<long long> mat_info = {
-        (long long)mdata,  // [0] BGR data
-        frame->width,      // [1] Width
-        frame->height,     // [2] Height
-        // (long long)app_ctx_.frame_pts,   // [3] PTS timestamp
-        // (long long)(fps * 100),          // [4] FPS * 100
-        // (long long)bitrate,              // [5] Bitrate in bps
-        // (long long)total_frames          // [6] Total frames (-1 for RTSP)
+        (long long)bgr_data,  // [0] BGR data (已经是BGR，无需转换)
+        frame->width,         // [1] Width
+        frame->height,        // [2] Height
     };
-    if (frame->virt_addr) {
-        free(frame->virt_addr);
-        frame->virt_addr = nullptr;
-    }
+
+    // 释放frame结构体，但不释放virt_addr（调用者负责）
+    frame->virt_addr = nullptr;  // 转移所有权给调用者
     delete frame;
 
     null_frame_times_.store(0);
+
     return mat_info;
 }
 
@@ -639,6 +609,8 @@ void API_CALL on_mk_play_event_func(void*       user_data,
                                     int         track_count)
 {
     app_context_t* ctx = (app_context_t*)user_data;
+    printf("SDKPlay on_result called with code: %d, msg: %s\n", err_code,
+           (err_msg ? err_msg : "unknown"));
     if (err_code == 0) {
         log_info("SDKPlay started successfully");
 
@@ -706,8 +678,8 @@ void API_CALL on_mk_shutdown_func(void*       user_data,
                                   mk_track    tracks[],
                                   int         track_count)
 {
-    // log_error("Play interrupted: code=" + std::to_string(err_code) +
-    //   ", msg=" + std::string(err_msg));
+    std::cout << "SDKPlay shutdown called with code: " << err_code
+              << ", msg: " << (err_msg ? err_msg : "unknown") << std::endl;
 
     // Update decoder status to failed on shutdown
     app_context_t* ctx = (app_context_t*)user_data;
@@ -721,9 +693,6 @@ int Decoder::stop()
     stop_.store(true);
     app_ctx_.stop = true;
 
-    // Update status to idle
-    decoder_status_.store(DECODER_STATUS_IDLE);
-
     // Stop local video reader first
     if (local_video_reader_) {
         local_video_reader_->stopReading();
@@ -734,14 +703,22 @@ int Decoder::stop()
 
     this_thread::sleep_for(chrono::milliseconds(200));
 
+    // Stop monitor thread first
+    if (monitor_thread_ && monitor_thread_->joinable()) {
+        monitor_thread_->join();
+        monitor_thread_.reset();
+    }
+
     // Properly join and reset the worker thread
     if (worker_ != nullptr && worker_->joinable()) {
         worker_->join();
         worker_.reset();  // Reset shared_ptr to avoid keeping old thread
     }
+    decoder_status_.store(DECODER_STATUS_IDLE);
 
     // Clear all remaining frames in stack
     clear_frame_stack(this);
+    // Update status to idle
 
     // log_info("Decoder stopped for instance: " +
     //          std::to_string(app_ctx_.instance_index));

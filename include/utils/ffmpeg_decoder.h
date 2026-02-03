@@ -31,6 +31,13 @@ class VideoDecoder {
                     int32_t&       pix_h,
                     int32_t&       format,
                     size_t&        data_size);
+    
+    // 直接解码为BGR，避免YUV中间拷贝
+    uint8_t* decodeToBGR(const uint8_t* src,
+                         uint32_t       len,
+                         int32_t&       pix_w,
+                         int32_t&       pix_h,
+                         size_t&        data_size);
 
   private:
     int32_t AVPixelFormat2Format(int32_t av_fmt);

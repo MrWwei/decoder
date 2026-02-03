@@ -103,7 +103,6 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
         // fprintf(stderr, "Error during decoding\n");
         return nullptr;  // buffer is NULL at this point
     }
-    cv::Mat outMat;
 
     while (1) {
         if (!(frame = av_frame_alloc())) {
@@ -123,7 +122,6 @@ uint8_t* VideoDecoder::decode(const uint8_t* src,
             goto fail;
         }
 
-        outMat     = avframe2mat(frame);
         tmp_frame  = frame;
         tmp_pixFmt = static_cast<AVPixelFormat>(tmp_frame->format);
         size       = av_image_get_buffer_size(tmp_pixFmt, tmp_frame->width,
@@ -171,4 +169,94 @@ int32_t VideoDecoder::AVPixelFormat2Format(int32_t pix_fmt)
         default: return DEC_FMT_NONE;
     }
     return DEC_FMT_NONE;
+}
+
+// 直接解码为BGR格式，避免YUV中间拷贝
+uint8_t* VideoDecoder::decodeToBGR(const uint8_t* src,
+                                   uint32_t       len,
+                                   int32_t&       pix_w,
+                                   int32_t&       pix_h,
+                                   size_t&        data_size)
+{
+    AVPacket* pkt    = nullptr;
+    AVFrame*  frame  = nullptr;
+    uint8_t*  buffer = nullptr;
+
+    pix_w     = 0;
+    pix_h     = 0;
+    data_size = 0;
+
+    if (dec_context == nullptr || src == nullptr || len == 0) {
+        return nullptr;
+    }
+
+    pkt = av_packet_alloc();
+    if (pkt == nullptr) {
+        return nullptr;
+    }
+
+    pkt->data = const_cast<uint8_t*>(src);
+    pkt->size = len;
+
+    int ret = avcodec_send_packet(dec_context, pkt);
+    if (ret < 0) {
+        av_packet_free(&pkt);
+        return nullptr;
+    }
+
+    frame = av_frame_alloc();
+    if (!frame) {
+        av_packet_free(&pkt);
+        return nullptr;
+    }
+
+    ret = avcodec_receive_frame(dec_context, frame);
+    if (ret < 0) {
+        av_frame_free(&frame);
+        av_packet_free(&pkt);
+        return nullptr;
+    }
+
+    // 直接转换为BGR格式
+    int width  = frame->width;
+    int height = frame->height;
+
+    // 分配BGR缓冲区
+    data_size = width * height * 3;
+    buffer    = (uint8_t*)malloc(data_size);
+    if (!buffer) {
+        av_frame_free(&frame);
+        av_packet_free(&pkt);
+        return nullptr;
+    }
+
+    // 创建SwsContext进行YUV到BGR的转换
+    SwsContext* sws_ctx = sws_getContext(
+        width, height, (AVPixelFormat)frame->format, width, height,
+        AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+    if (!sws_ctx) {
+        free(buffer);
+        av_frame_free(&frame);
+        av_packet_free(&pkt);
+        return nullptr;
+    }
+
+    // 设置输出缓冲区
+    uint8_t* dst_data[4]     = {buffer, nullptr, nullptr, nullptr};
+    int      dst_linesize[4] = {width * 3, 0, 0, 0};
+
+    // 执行转换
+    sws_scale(sws_ctx, frame->data, frame->linesize, 0, height, dst_data,
+              dst_linesize);
+
+    // 清理
+    sws_freeContext(sws_ctx);
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+
+    pix_w = width;
+    pix_h = height;
+
+    return buffer;
 }

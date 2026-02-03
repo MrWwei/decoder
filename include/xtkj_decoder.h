@@ -103,7 +103,8 @@ class IDecoder {
     virtual int start_pull(string video_path,
                            int    is_mpp           = 0,
                            int    interval         = 1,
-                           int    timeout_frame_ms = 200) = 0;
+                           int    timeout_frame_ms = 200,
+                           bool   auto_reopen      = true) = 0;
     /**
      * @description: 停止视频拉取/读取
      * @return 0成功
@@ -152,6 +153,28 @@ class IDecoder {
      *       对RTSP流无效
      */
     virtual void set_loop_playback(bool loop) = 0;
+    /**
+     * @description: 设置RTSP流中断后是否自动重连
+     * @param {bool} auto_reopen true=自动重连（默认），false=不自动重连
+     * @note 仅对RTSP流有效，对本地文件无效
+     *       可以在start_pull()之前或者运行时调用
+     */
+    virtual void set_auto_reopen(bool auto_reopen) = 0;
+    /**
+     * @description: 获取RTSP流中断后是否自动重连的设置
+     * @return true=自动重连，false=不自动重连
+     */
+    virtual bool get_auto_reopen() = 0;
+    /**
+     * @description: 获取是否保持重连状态
+     * @return true=保持重连，false=不保持重连
+     */
+    virtual bool get_keep_reopen() = 0;
+    /**
+     * @description: 设置是否保持重连状态
+     * @param {bool} keep_reopen true=保持重连，false=不保持重连
+     */
+    virtual void set_keep_reopen(bool keep_reopen) = 0;
 
     virtual ~IDecoder() noexcept = default;
 };

@@ -48,6 +48,10 @@ class LocalVideoReader {
 
     bool open(const std::string& videoPath);
     bool readFrame(cv::Mat& outMat);
+    
+    // 直接返回BGR数据指针，避免多次拷贝（调用者负责free）
+    uint8_t* readFrameDirect(int& width, int& height, size_t& data_size);
+    
     void stopReading();
     void setLoopPlayback(bool loop);
     void setFrameSkip(bool enable);

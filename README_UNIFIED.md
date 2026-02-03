@@ -21,7 +21,60 @@
 ✅ **帧间隔控制** - RTSP流支持跳帧处理，降低CPU负载  
 ✅ **线程安全** - 内部使用线程池和原子操作  
 ✅ **内存管理** - RAII和智能指针，避免内存泄漏  
-✅ **超时重连** - RTSP流断线自动重连  
+✅ **自动重连** - RTSP流断线智能检测并自动重连（v2.5新增） 🆕  
+
+---
+
+## 🆕 v2.5 新功能：RTSP流自动重连
+
+### 智能流中断检测
+
+系统提供双重检测机制，时刻监控RTSP流状态：
+- **超时检测**：连续获取帧失败时触发
+- **后台监控**：独立线程持续检查流健康状态
+
+### auto_reopen参数
+
+通过`auto_reopen`参数控制是否自动重连（默认启用）：
+
+```cpp
+// 启用自动重连（默认）
+decoder->set_auto_reopen(true);
+
+// 禁用自动重连（需要手动处理）
+decoder->set_auto_reopen(false);
+
+// 查询当前设置
+bool enabled = decoder->get_auto_reopen();
+```
+
+### 使用示例
+
+```cpp
+IDecoder* decoder = createDecoder();
+decoder->init(10000);
+
+// RTSP流会自动重连，无需特殊处理
+decoder->start_pull("rtsp://192.168.1.100:554/stream");
+
+while (running) {
+    auto frame = decoder->get_frame();
+    if (!frame.empty()) {
+        // 处理帧数据
+        uint8_t* bgr_data = (uint8_t*)frame[0];
+        // ... 使用数据 ...
+        free(bgr_data);
+    }
+    // 流中断时系统会自动重连，应用层无感知
+}
+```
+
+### 详细文档
+
+- 📖 [完整功能说明](RTSP_AUTO_RECONNECT_README.md)
+- 💻 [使用示例代码](example_auto_reconnect.cpp)
+- 📋 [快速参考](QUICK_REFERENCE.md)
+- 📝 [变更日志](CHANGELOG.md)
 
 ---
 

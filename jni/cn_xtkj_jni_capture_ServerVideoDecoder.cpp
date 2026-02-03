@@ -76,9 +76,10 @@ JNIEXPORT jint JNICALL Java_cn_xtkj_jni_capture_ServerVideoDecoder_open(
     if (decoder == nullptr) {
         return -1;
     }
-
-    const char* rtspurl_cs = env->GetStringUTFChars(rtspurl, NULL);
-    int ret = decoder->start_pull(rtspurl_cs, 0, 0, takeMatTimeOutMilliseconds);
+    bool        auto_reopen = (autoReopen != 0);
+    const char* rtspurl_cs  = env->GetStringUTFChars(rtspurl, NULL);
+    int         ret         = decoder->start_pull(rtspurl_cs, 0, interval,
+                                                  takeMatTimeOutMilliseconds, auto_reopen);
     env->ReleaseStringUTFChars(rtspurl, rtspurl_cs);
     return ret;
 }
@@ -283,12 +284,14 @@ Java_cn_xtkj_jni_capture_ServerVideoDecoder_release(JNIEnv* env,
         }
 
         xtkj::IDecoder* decoder = it->second;
-
+        // printf("jni 释放解码器 %d 中...\n", handleid);
         // 停止解码器
         decoder->stop();
+        // printf("jni 停止解码器 %d 成功\n", handleid);
 
         // 释放解码器
         xtkj::releaseDecoder(decoder);
+        // printf("jni 释放解码器 %d 成功2\n", handleid);
 
         // 从map中移除
         decoders.erase(it);

@@ -21,7 +21,7 @@ struct DecoderConfig
 {
     static constexpr int MAX_STACK_SIZE     = 1;
     static constexpr int DEFAULT_TIMEOUT_MS = 10000;
-    static constexpr int MAX_RETRY_TIMES    = 20;
+    static constexpr int MAX_RETRY_TIMES    = 50;
 };
 
 typedef struct
@@ -36,8 +36,11 @@ typedef struct
     bool           skip_next_frame{false};
     int            decode_type{0};
     bool           stop{false};
+    bool           auto_reopen = true;
     bool           is_interval = true;
     bool           is_mpp      = false;
+    void*          player;
+    string         url;
 } app_context_t;
 
 class Decoder : public IDecoder {
@@ -51,7 +54,8 @@ class Decoder : public IDecoder {
     int               start_pull(string video_path,
                                  int    is_mpp           = 1,
                                  int    interval         = 1,
-                                 int    timeout_frame_ms = 200) override;
+                                 int    timeout_frame_ms = 200,
+                                 bool   auto_reopen      = true) override;
     int               start_pull();
     int               stop() override;
     string            get_rtsp() override;
@@ -62,6 +66,9 @@ class Decoder : public IDecoder {
     int               get_frame_height() override;
     int               get_status() override;
     void              set_loop_playback(bool loop) override;
+    void              set_auto_reopen(bool auto_reopen) override;
+    bool              get_auto_reopen() override;
+    bool              get_keep_reopen() override;
 
     // Setter methods for updating video info (used in callbacks)
     void set_fps(double fps);
@@ -70,6 +77,7 @@ class Decoder : public IDecoder {
     void set_frame_width(int frame_width);
     void set_frame_height(int frame_height);
     void set_status(int status);
+    void set_keep_reopen(bool keep_reopen);
 
     // Public access to synchronization primitives for callback functions
     std::mutex                 stack_mutex_;
@@ -82,6 +90,11 @@ class Decoder : public IDecoder {
   private:
     std::atomic<int> null_frame_times_{0};
     int              failed_times_{DecoderConfig::MAX_RETRY_TIMES};
+
+    // Stream monitoring
+    std::shared_ptr<std::thread> monitor_thread_;
+    std::atomic<int64_t>         last_frame_time_{0};
+    std::mutex                   reconnect_mutex_;
 
     std::shared_ptr<VideoDecoder>     decoder_soft_ = nullptr;
     std::shared_ptr<PullFramer>       puller_ = PullFramer::CreateShared();
@@ -102,9 +115,14 @@ class Decoder : public IDecoder {
     int64_t total_frames_{-1};
     int     frame_width_{0};
     int     frame_height_{0};
+    bool    keep_reopen_{true};
 
     // Decoder status
     std::atomic<int> decoder_status_{DECODER_STATUS_IDLE};
+
+    // mk_player pointer and mutex for safe stop
+    std::mutex player_mutex_;
+    void*      mk_player_{nullptr};
 
     int process_video(app_context_t*      ctx,
                       const char*         path,

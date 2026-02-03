@@ -187,19 +187,6 @@ bool LocalVideoReader::readFrame(cv::Mat& outMat)
             }
 
             if (packet_->stream_index == videoStreamIndex_) {
-                // 跳帧处理：当 is_interval_=true
-                // 时，交替跳过帧（解码一帧，跳过一帧）
-                // 使用布尔标志避免计数器在长时间运行中溢出
-                if (is_interval_) {
-                    if (skip_next_frame_) {
-                        skip_next_frame_ = false;  // 翻转标志，下一帧解码
-                        av_packet_unref(packet_);
-                        // printf("跳过一帧\n");
-                        continue;  // 跳过当前帧，不解码
-                    }
-                    skip_next_frame_ = true;  // 翻转标志，下一帧跳过
-                }
-
                 int ret = avcodec_send_packet(codecContext_, packet_);
                 if (ret < 0) {
                     av_packet_unref(packet_);
@@ -214,6 +201,18 @@ bool LocalVideoReader::readFrame(cv::Mat& outMat)
                 else if (ret < 0) {
                     av_packet_unref(packet_);
                     return false;
+                }
+
+                // 跳帧处理：只在成功解码后才处理跳帧逻辑
+                // 这样确保跳帧是基于实际输出的帧，而不是packet
+                if (is_interval_) {
+                    if (skip_next_frame_) {
+                        skip_next_frame_ = false;  // 翻转标志，下一帧输出
+                        av_packet_unref(packet_);
+                        // printf("跳过解码帧\n");
+                        continue;  // 跳过这个已解码的帧，不输出
+                    }
+                    skip_next_frame_ = true;  // 翻转标志，下一帧跳过
                 }
 
                 sws_scale(swsContext_, frame_->data, frame_->linesize, 0,
@@ -262,6 +261,115 @@ bool LocalVideoReader::readFrame(cv::Mat& outMat)
     }
 
     return false;
+}
+
+// 直接返回BGR数据指针，避免多次拷贝
+uint8_t*
+LocalVideoReader::readFrameDirect(int& width, int& height, size_t& data_size)
+{
+    if (!opened_ || stop_.load()) {
+        return nullptr;
+    }
+
+    while (!stop_.load()) {
+        while (av_read_frame(formatContext_, packet_) >= 0) {
+            if (stop_.load()) {
+                av_packet_unref(packet_);
+                return nullptr;
+            }
+
+            if (packet_->stream_index == videoStreamIndex_) {
+                int ret = avcodec_send_packet(codecContext_, packet_);
+                if (ret < 0) {
+                    av_packet_unref(packet_);
+                    continue;
+                }
+
+                ret = avcodec_receive_frame(codecContext_, frame_);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    av_packet_unref(packet_);
+                    continue;
+                }
+                else if (ret < 0) {
+                    av_packet_unref(packet_);
+                    return nullptr;
+                }
+
+                // 跳帧处理：只在成功解码后才处理跳帧逻辑
+                if (is_interval_) {
+                    if (skip_next_frame_) {
+                        skip_next_frame_ = false;
+                        av_packet_unref(packet_);
+                        // printf("跳过解码帧\n");
+                        continue;
+                    }
+                    skip_next_frame_ = true;
+                }
+
+                // 直接转换为BGR并分配新内存
+                width     = width_;
+                height    = height_;
+                data_size = width * height * 3;
+
+                uint8_t* bgr_data = (uint8_t*)malloc(data_size);
+                if (!bgr_data) {
+                    av_packet_unref(packet_);
+                    return nullptr;
+                }
+
+                // 创建SwsContext转换为BGR
+                SwsContext* sws_bgr = sws_getContext(
+                    width, height, codecContext_->pix_fmt, width, height,
+                    AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+                if (!sws_bgr) {
+                    free(bgr_data);
+                    av_packet_unref(packet_);
+                    return nullptr;
+                }
+
+                uint8_t* dst_data[4] = {bgr_data, nullptr, nullptr, nullptr};
+                int      dst_linesize[4] = {width * 3, 0, 0, 0};
+
+                sws_scale(sws_bgr, frame_->data, frame_->linesize, 0, height,
+                          dst_data, dst_linesize);
+
+                sws_freeContext(sws_bgr);
+
+                // 计算PTS
+                if (frame_->pts != AV_NOPTS_VALUE) {
+                    last_pts_ = static_cast<int64_t>(frame_->pts * time_base_);
+                }
+                else if (packet_->pts != AV_NOPTS_VALUE) {
+                    last_pts_ = static_cast<int64_t>(packet_->pts * time_base_);
+                }
+                else {
+                    last_pts_ += static_cast<int64_t>(
+                        1000.0 /
+                        av_q2d(formatContext_->streams[videoStreamIndex_]
+                                   ->r_frame_rate));
+                }
+
+                av_packet_unref(packet_);
+                return bgr_data;
+            }
+            av_packet_unref(packet_);
+        }
+
+        // End of file
+        if (!stop_.load() && loop_playback_) {
+            av_seek_frame(formatContext_, videoStreamIndex_, 0,
+                          AVSEEK_FLAG_BACKWARD);
+            avcodec_flush_buffers(codecContext_);
+            last_pts_        = 0;
+            skip_next_frame_ = false;
+        }
+        else {
+            break;
+        }
+    }
+
+    return nullptr;
 }
 
 void LocalVideoReader::stopReading()

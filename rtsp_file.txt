@@ -1,1 +1,1 @@
-rtsp://192.168.1.118/g4_test.mp4
+rtmp://192.168.1.118/myapp/g4_test.mp4
