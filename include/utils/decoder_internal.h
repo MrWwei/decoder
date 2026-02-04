@@ -81,10 +81,12 @@ class Decoder : public IDecoder {
     void set_status(int status);
     void set_keep_reopen(bool keep_reopen);
 
-    // Public access to synchronization primitives for callback functions
-    std::mutex                 stack_mutex_;
-    std::condition_variable    stack_cond_;
-    std::stack<image_frame_t*> frame_stack_;
+    // Double buffering mechanism for real-time frame access
+    // 双缓冲机制：无锁设计，最低延迟，始终获取最新帧
+    std::atomic<image_frame_t*> current_frame_{nullptr};
+    std::atomic<image_frame_t*> next_frame_{nullptr};
+    std::mutex                  frame_mutex_;  // 仅用于条件变量
+    std::condition_variable     frame_cond_;   // 用于通知新帧到达
 
     std::atomic<bool> stop_{false};
     std::atomic<int>  reopen_times_{0};

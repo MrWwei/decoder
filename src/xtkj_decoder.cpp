@@ -47,10 +47,13 @@ constexpr int DecoderConfig::MAX_RETRY_TIMES;
 constexpr int DecoderConfig::MAX_RECONNECT_TIMES;
 constexpr int DecoderConfig::RECONNECT_DELAY_MS;
 
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+// Forward declarations
+static void clear_frame_buffers(Decoder* decoder);
 // Decoder class implementation
 Decoder::Decoder()
 {
@@ -72,6 +75,9 @@ Decoder::~Decoder()
         delete app_ctx_.frame;
         app_ctx_.frame = nullptr;
     }
+
+    // Clean up double buffer frames
+    clear_frame_buffers(this);
 
     // Ensure local video reader is stopped
     if (local_video_reader_) {
@@ -132,23 +138,30 @@ static bool is_rtsp_url(const std::string& path)
     return (path.find("rtsp://") == 0 || path.find("rtmp://") == 0);
 }
 
-// Helper function to clear frame stack
-static void clear_frame_stack(Decoder* decoder)
+// Helper function to clear double buffer frames
+static void clear_frame_buffers(Decoder* decoder)
 {
     if (!decoder)
         return;
 
-    std::unique_lock<std::mutex> lock(decoder->stack_mutex_);
-    while (!decoder->frame_stack_.empty()) {
-        image_frame_t* frame_item = decoder->frame_stack_.top();
-        decoder->frame_stack_.pop();
-        if (frame_item) {
-            if (frame_item->virt_addr) {
-                free(frame_item->virt_addr);
-                frame_item->virt_addr = nullptr;
-            }
-            delete frame_item;
+    // 清理 current_frame_
+    image_frame_t* current = decoder->current_frame_.exchange(nullptr);
+    if (current) {
+        if (current->virt_addr) {
+            free(current->virt_addr);
+            current->virt_addr = nullptr;
         }
+        delete current;
+    }
+
+    // 清理 next_frame_
+    image_frame_t* next = decoder->next_frame_.exchange(nullptr);
+    if (next) {
+        if (next->virt_addr) {
+            free(next->virt_addr);
+            next->virt_addr = nullptr;
+        }
+        delete next;
     }
 }
 
@@ -447,23 +460,23 @@ void onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
             return;
         }
 
-        {
-            std::unique_lock<std::mutex> lock(decoder_obj->stack_mutex_);
-
-            while (decoder_obj->frame_stack_.size() >=
-                   DecoderConfig::MAX_STACK_SIZE) {
-                image_frame_t* frame_item = decoder_obj->frame_stack_.top();
-                decoder_obj->frame_stack_.pop();
-                if (frame_item) {
-                    if (frame_item->virt_addr) {
-                        free(frame_item->virt_addr);
-                        frame_item->virt_addr = nullptr;
-                    }
-                    delete frame_item;
-                }
+        // 双缓冲机制：将新帧放入next_frame_，原子交换并释放旧帧
+        // 无锁设计，性能最优，始终保存最新帧
+        image_frame_t* old_frame = decoder_obj->next_frame_.exchange(frame);
+        
+        // 释放被替换的旧帧
+        if (old_frame) {
+            if (old_frame->virt_addr) {
+                free(old_frame->virt_addr);
+                old_frame->virt_addr = nullptr;
             }
-            decoder_obj->frame_stack_.push(frame);
-            decoder_obj->stack_cond_.notify_all();
+            delete old_frame;
+        }
+        
+        // 通知等待线程有新帧到达（可选，用于超时等待）
+        {
+            std::lock_guard<std::mutex> lock(decoder_obj->frame_mutex_);
+            decoder_obj->frame_cond_.notify_all();
         }
     }
 }
@@ -504,22 +517,26 @@ vector<long long> Decoder::get_frame()
         return mat_info;
     }
 
-    // For RTSP streams: use frame stack with timeout and retry logic
+    // For RTSP streams: use double buffering with timeout and retry logic
     image_frame_t* frame{nullptr};
-    {
-        std::unique_lock<std::mutex> lock(stack_mutex_);
-        stack_cond_.wait_for(lock, std::chrono::milliseconds(timeout_frame_ms_),
-                             [this] { return !frame_stack_.empty(); });
-        if (frame_stack_.empty()) {
-            stack_cond_.notify_all();
-            lock.unlock();
-
+    
+    // 尝试直接获取帧（无锁，快速路径）
+    frame = next_frame_.exchange(nullptr);
+    
+    // 如果没有帧，等待新帧到达
+    if (!frame) {
+        std::unique_lock<std::mutex> lock(frame_mutex_);
+        frame_cond_.wait_for(lock, std::chrono::milliseconds(timeout_frame_ms_),
+                             [this] { return next_frame_.load() != nullptr; });
+        lock.unlock();
+        
+        // 再次尝试获取帧
+        frame = next_frame_.exchange(nullptr);
+        
+        if (!frame) {
+            // 超时且仍无帧
             return {};
         }
-
-        frame = frame_stack_.top();
-        frame_stack_.pop();
-        stack_cond_.notify_all();
     }
 
     // frame->virt_addr 现在已经是BGR数据，无需再转换
@@ -709,7 +726,7 @@ int Decoder::stop()
     }
 
     // Notify waiting threads to unblock
-    stack_cond_.notify_all();
+    frame_cond_.notify_all();
 
     this_thread::sleep_for(chrono::milliseconds(200));
 
@@ -791,11 +808,7 @@ void Decoder::monitor_stream_status()
                 std::lock_guard<std::mutex> lock(reconnect_mutex_);
 
                 // 记录当前配置
-                std::string video_path    = rtsp_url_;
-                int         is_mpp        = app_ctx_.is_mpp;
-                int         interval      = app_ctx_.is_interval;
-                int         timeout_frame = timeout_frame_ms_;
-                bool        auto_reopen   = app_ctx_.auto_reopen;
+                std::string video_path = rtsp_url_;
 
                 // 停止当前流（但不停止监测线程）
                 stop_.store(true);

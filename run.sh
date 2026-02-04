@@ -4,5 +4,5 @@ export LD_LIBRARY_PATH=$THIRD_PARTY/opencv-4.5.4_video/build/install/lib:$THIRD_
 # export LD_LIBRARY_PATH=$THIRD_PARTY/zlmediaKit/aarch64:$THIRD_PARTY/ffmpeg-4.3.8/install/lib:$THIRD_PARTY/opencv-4.5.4/build/install/lib:$LD_LIBRARY_PATH
 # ./build/VideoDecoder rtsp_file.txt 
 # ./build/VideoDecoder rtsp_file.txt 1 300 1 0
-./build/VideoDecoder rtsp_file.txt  1 0 1 0
+./build/VideoDecoder rtsp_file.txt  1 0 0 0
 # ./build/VideoDecoder rtsp_file.txt 1

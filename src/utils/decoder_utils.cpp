@@ -26,23 +26,30 @@ bool is_rtsp_url(const std::string& path)
     return (path.find("rtsp://") == 0 || path.find("rtmp://") == 0);
 }
 
-// Helper function to clear frame stack
+// Helper function to clear double buffer frames
 void clear_frame_stack(Decoder* decoder)
 {
     if (!decoder)
         return;
 
-    std::unique_lock<std::mutex> lock(decoder->stack_mutex_);
-    while (!decoder->frame_stack_.empty()) {
-        image_frame_t* frame_item = decoder->frame_stack_.top();
-        decoder->frame_stack_.pop();
-        if (frame_item) {
-            if (frame_item->virt_addr) {
-                free(frame_item->virt_addr);
-                frame_item->virt_addr = nullptr;
-            }
-            delete frame_item;
+    // 清理 current_frame_
+    image_frame_t* current = decoder->current_frame_.exchange(nullptr);
+    if (current) {
+        if (current->virt_addr) {
+            free(current->virt_addr);
+            current->virt_addr = nullptr;
         }
+        delete current;
+    }
+
+    // 清理 next_frame_
+    image_frame_t* next = decoder->next_frame_.exchange(nullptr);
+    if (next) {
+        if (next->virt_addr) {
+            free(next->virt_addr);
+            next->virt_addr = nullptr;
+        }
+        delete next;
     }
 }
 

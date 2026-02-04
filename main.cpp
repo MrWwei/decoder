@@ -409,7 +409,7 @@ int main(int argc, char* argv[])
 
             printf("解码器状态： %d\n", status);
             bool auto_reopen = true;
-            int  interval    = 0;  // 帧间隔（0=全部帧，1=跳帧）
+            int  interval    = 1;  // 帧间隔（0=全部帧，1=跳帧）
             int  ret = decoders[i]->start_pull(video_paths[i], 0, interval,
                                                timeout_ms, auto_reopen);
             if (ret != 0) {
