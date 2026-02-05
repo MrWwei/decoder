@@ -58,7 +58,7 @@ class Decoder : public IDecoder {
                                  int    interval         = 1,
                                  int    timeout_frame_ms = 200,
                                  bool   auto_reopen      = true) override;
-    int               start_pull();
+    // int               start_pull();
     int               stop() override;
     string            get_rtsp() override;
     double            get_fps() override;
@@ -80,6 +80,58 @@ class Decoder : public IDecoder {
     void set_frame_height(int frame_height);
     void set_status(int status);
     void set_keep_reopen(bool keep_reopen);
+
+    // Frame object pool to reduce memory allocation/deallocation
+    // 帧对象池：避免频繁 new/delete，提升性能，减少内存碎片
+    struct FramePool {
+        std::array<image_frame_t, 3> frames;  // 预分配3个帧对象（双缓冲+1备用）
+        std::atomic<uint8_t> usage_mask{0};   // 位掩码：标记哪些帧正在使用
+        std::mutex pool_mutex;                 // 保护对象池
+        
+        image_frame_t* acquire() {
+            std::lock_guard<std::mutex> lock(pool_mutex);
+            uint8_t mask = usage_mask.load();
+            for (size_t i = 0; i < frames.size(); ++i) {
+                if ((mask & (1 << i)) == 0) {  // 找到未使用的帧
+                    usage_mask.store(mask | (1 << i));
+                    frames[i].virt_addr = nullptr;  // 重置
+                    frames[i].data_size = 0;
+                    return &frames[i];
+                }
+            }
+            return nullptr;  // 池已满，需要等待或回退到 new
+        }
+        
+        void release(image_frame_t* frame) {
+            if (!frame) return;
+            std::lock_guard<std::mutex> lock(pool_mutex);
+            for (size_t i = 0; i < frames.size(); ++i) {
+                if (&frames[i] == frame) {
+                    // 释放帧数据但保留结构体
+                    if (frame->virt_addr) {
+                        free(frame->virt_addr);
+                        frame->virt_addr = nullptr;
+                    }
+                    uint8_t mask = usage_mask.load();
+                    usage_mask.store(mask & ~(1 << i));
+                    return;
+                }
+            }
+            // 如果不在池中（回退分配的），直接释放
+            if (frame->virt_addr) {
+                free(frame->virt_addr);
+                frame->virt_addr = nullptr;
+            }
+            delete frame;
+        }
+        
+        bool is_pool_frame(image_frame_t* frame) {
+            if (!frame) return false;
+            return frame >= &frames[0] && frame < &frames[frames.size()];
+        }
+    };
+    
+    FramePool frame_pool_;  // 帧对象池实例
 
     // Double buffering mechanism for real-time frame access
     // 双缓冲机制：无锁设计，最低延迟，始终获取最新帧

@@ -144,24 +144,16 @@ static void clear_frame_buffers(Decoder* decoder)
     if (!decoder)
         return;
 
-    // 清理 current_frame_
+    // 清理 current_frame_（使用对象池回收）
     image_frame_t* current = decoder->current_frame_.exchange(nullptr);
     if (current) {
-        if (current->virt_addr) {
-            free(current->virt_addr);
-            current->virt_addr = nullptr;
-        }
-        delete current;
+        decoder->frame_pool_.release(current);
     }
 
-    // 清理 next_frame_
+    // 清理 next_frame_（使用对象池回收）
     image_frame_t* next = decoder->next_frame_.exchange(nullptr);
     if (next) {
-        if (next->virt_addr) {
-            free(next->virt_addr);
-            next->virt_addr = nullptr;
-        }
-        delete next;
+        decoder->frame_pool_.release(next);
     }
 }
 
@@ -272,6 +264,15 @@ int Decoder::start_pull(string video_path,
 
     rtsp_url_ = video_path;
 
+    // 重新初始化puller和decoder（关键：确保每次启动都有干净的实例）
+    if (!puller_) {
+        puller_ = PullFramer::CreateShared();
+    }
+    // 重新设置回调函数
+    app_ctx_.puller = static_cast<void*>(&puller_);
+    app_ctx_.decoder_ffmpeg = static_cast<void*>(&decoder_soft_);
+    puller_->setOnGetFrame(onGetFrame, static_cast<void*>(&app_ctx_));
+
     // Set status to opening
     decoder_status_.store(DECODER_STATUS_OPENING);
 
@@ -306,35 +307,35 @@ int Decoder::start_pull(string video_path,
 
     return result ? 0 : -1;
 }
-int Decoder::start_pull()
-{
-    stop_.store(false);
-    app_ctx_.stop = false;
+// int Decoder::start_pull()
+// {
+//     stop_.store(false);
+//     app_ctx_.stop = false;
 
-    // Set status to opening
-    decoder_status_.store(DECODER_STATUS_OPENING);
+//     // Set status to opening
+//     decoder_status_.store(DECODER_STATUS_OPENING);
 
-    std::promise<bool> pro;
+//     std::promise<bool> pro;
 
-    if (is_local_file_) {
-        worker_ =
-            std::make_shared<std::thread>(&Decoder::process_local_video, this,
-                                          rtsp_url_.c_str(), std::ref(pro));
-    }
-    else {
-        worker_ = std::make_shared<std::thread>(&Decoder::process_video, this,
-                                                &app_ctx_, rtsp_url_.c_str(),
-                                                std::ref(pro));
-    }
+//     if (is_local_file_) {
+//         worker_ =
+//             std::make_shared<std::thread>(&Decoder::process_local_video, this,
+//                                           rtsp_url_.c_str(), std::ref(pro));
+//     }
+//     else {
+//         worker_ = std::make_shared<std::thread>(&Decoder::process_video, this,
+//                                                 &app_ctx_, rtsp_url_.c_str(),
+//                                                 std::ref(pro));
+//     }
 
-    bool result = pro.get_future().get();
-    if (!result) {
-        decoder_status_.store(DECODER_STATUS_FAILED);
-    }
-    this_thread::sleep_for(chrono::milliseconds(3000));
+//     bool result = pro.get_future().get();
+//     if (!result) {
+//         decoder_status_.store(DECODER_STATUS_FAILED);
+//     }
+//     this_thread::sleep_for(chrono::milliseconds(3000));
 
-    return result ? 0 : -1;
-}
+//     return result ? 0 : -1;
+// }
 void API_CALL on_mk_play_event_func(void*       user_data,
                                     int         err_code,
                                     const char* err_msg,
@@ -349,23 +350,27 @@ int           Decoder::process_video(app_context_t*      ctx,
                                      const char*         path,
                                      std::promise<bool>& pro)
 {
-    mk_config config;
-    memset(&config, 0, sizeof(mk_config));
+    // mk_env_init只需初始化一次，避免重复初始化导致资源泄漏
+    static std::atomic<bool> env_initialized{false};
+    if (!env_initialized.exchange(true)) {
+        mk_config config;
+        memset(&config, 0, sizeof(mk_config));
 
-    config.ini         = NULL;
-    config.ini_is_path = 0;
-    config.log_level   = 0;
-    config.log_mask    = LOG_CONSOLE;
-    config.ssl         = NULL;
-    config.ssl_is_path = 1;
-    config.ssl_pwd     = NULL;
-    config.thread_num  = 0;
-    mk_env_init(&config);
+        config.ini         = NULL;
+        config.ini_is_path = 0;
+        config.log_level   = 0;
+        config.log_mask    = LOG_CONSOLE;
+        config.ssl         = NULL;
+        config.ssl_is_path = 1;
+        config.ssl_pwd     = NULL;
+        config.thread_num  = 0;
+        mk_env_init(&config);
+    }
 
     // Set decoder instance pointer for callback to update fps/bitrate
     ctx->decoder_instance = static_cast<void*>(this);
 
-    bool reconnect_flag  = false;
+    // bool reconnect_flag  = false;
     ctx->url             = string(path);
     ctx->skip_next_frame = false;
     ctx->player          = mk_player_create();
@@ -393,6 +398,7 @@ int           Decoder::process_video(app_context_t*      ctx,
     // 立即释放player，不再等待
     if (ctx->player) {
         mk_player_release((mk_player)ctx->player);
+        ctx->player = nullptr;  // 防止重复释放
         // printf("mk player released!!!\n");
     }
 
@@ -437,40 +443,38 @@ void onGetFrame(const FrameData::Ptr& framePtr, void* userData1)
             ctx->skip_next_frame = true;
         }
 
-        image_frame_t* frame = new image_frame_t();
-        frame->height        = pixel_height;
-        frame->width         = pixel_width;
-        frame->data_size     = data_size;
-        frame->virt_addr     = bgr_data;  // 现在存储的是BGR数据
-        frame->format        = 0;         // BGR format
+        // Get Decoder instance to access member variables
+        Decoder* decoder_obj = static_cast<Decoder*>(ctx->decoder_instance);
+        if (!decoder_obj) {
+            // Cleanup if decoder instance is null
+            free(bgr_data);
+            return;
+        }
+
+        // 从对象池获取帧对象（避免频繁 new）
+        image_frame_t* frame = decoder_obj->frame_pool_.acquire();
+        if (!frame) {
+            // 对象池已满，回退到动态分配（极少发生）
+            frame = new image_frame_t();
+        }
+        
+        frame->height    = pixel_height;
+        frame->width     = pixel_width;
+        frame->data_size = data_size;
+        frame->virt_addr = bgr_data;  // 现在存储的是BGR数据
+        frame->format    = 0;         // BGR format
 
         uint64_t pts_cur = framePtr->pts() * 1000;
         ctx->frame_pts += pts_cur;
         frame->pts = ctx->frame_pts;
 
-        // Get Decoder instance to access member variables
-        Decoder* decoder_obj = static_cast<Decoder*>(ctx->decoder_instance);
-        if (!decoder_obj) {
-            // Cleanup if decoder instance is null
-            if (frame->virt_addr) {
-                free(frame->virt_addr);
-                frame->virt_addr = nullptr;
-            }
-            delete frame;
-            return;
-        }
-
         // 双缓冲机制：将新帧放入next_frame_，原子交换并释放旧帧
         // 无锁设计，性能最优，始终保存最新帧
         image_frame_t* old_frame = decoder_obj->next_frame_.exchange(frame);
         
-        // 释放被替换的旧帧
+        // 释放被替换的旧帧（归还对象池）
         if (old_frame) {
-            if (old_frame->virt_addr) {
-                free(old_frame->virt_addr);
-                old_frame->virt_addr = nullptr;
-            }
-            delete old_frame;
+            decoder_obj->frame_pool_.release(old_frame);
         }
         
         // 通知等待线程有新帧到达（可选，用于超时等待）
@@ -544,7 +548,7 @@ vector<long long> Decoder::get_frame()
 
     if (bgr_data == nullptr) {
         log_error("Frame data is null");
-        delete frame;
+        frame_pool_.release(frame);
         return {};
     }
 
@@ -554,9 +558,9 @@ vector<long long> Decoder::get_frame()
         frame->height,        // [2] Height
     };
 
-    // 释放frame结构体，但不释放virt_addr（调用者负责）
-    frame->virt_addr = nullptr;  // 转移所有权给调用者
-    delete frame;
+    // 释放frame结构体，但不释放virt_addr（调用者负责释放数据）
+    frame->virt_addr = nullptr;  // 转移数据所有权给调用者
+    frame_pool_.release(frame);  // 归还帧结构体到对象池
 
     null_frame_times_.store(0);
 
@@ -662,11 +666,11 @@ void API_CALL on_mk_play_event_func(void*       user_data,
                     int frame_height = mk_track_video_height(tracks[i]);
                     decoder_obj->set_frame_height(frame_height);
                     decoder_obj->set_frame_width(frame_width);
-                    if (ctx->decoder_instance) {
-                        Decoder* decoder_obj =
-                            static_cast<Decoder*>(ctx->decoder_instance);
+                    // if (ctx->decoder_instance) {
+                    //     Decoder* decoder_obj =
+                    //         static_cast<Decoder*>(ctx->decoder_instance);
                         decoder_obj->set_status(DECODER_STATUS_OPENED);
-                    }
+                    // }
                 }
 
                 if (!ctx->is_mpp) {
@@ -716,31 +720,49 @@ int Decoder::stop()
 {
     stop_.store(true);
     app_ctx_.stop = true;
-
+    
     // Stop monitor thread
     stop_monitor_thread();
 
     // Stop local video reader first
     if (local_video_reader_) {
         local_video_reader_->stopReading();
+        local_video_reader_.reset();  // 释放资源
     }
 
     // Notify waiting threads to unblock
     frame_cond_.notify_all();
 
-    this_thread::sleep_for(chrono::milliseconds(200));
+    this_thread::sleep_for(chrono::milliseconds(200));  // ❌ 不可靠的同步
 
     // Properly join and reset the worker thread
     if (worker_ != nullptr && worker_->joinable()) {
         worker_->join();
         worker_.reset();  // Reset shared_ptr to avoid keeping old thread
     }
+
+    // Release mk_player if exists
+    if (app_ctx_.player) {
+        mk_player_release((mk_player)app_ctx_.player);
+        app_ctx_.player = nullptr;
+    }
+
+    // Reset decoder and puller to release resources
+    // 关键：重置解码器和拉流器，防止内存泄漏
+    if (decoder_soft_) {
+        decoder_soft_.reset();
+    }
+    if (puller_) {
+        puller_.reset();
+    }
+
     decoder_status_.store(DECODER_STATUS_IDLE);
 
-    // Clear all remaining frames in stack
-    clear_frame_stack(this);
+    // Clear all remaining frames in double buffer
+    clear_frame_buffers(this);
     return 0;
 }
+
 
 IDecoder* xtkj::createDecoder()
 {
@@ -820,8 +842,29 @@ void Decoder::monitor_stream_status()
                     worker_.reset();
                 }
 
-                // 清理帧栈
-                clear_frame_stack(this);
+                // 释放旧的mk_player对象（关键：防止内存泄漏）
+                if (app_ctx_.player) {
+                    mk_player_release((mk_player)app_ctx_.player);
+                    app_ctx_.player = nullptr;
+                }
+
+                // 重置decoder_soft_和puller_，释放旧的解码器资源
+                // 这些shared_ptr会自动调用析构函数释放资源
+                if (decoder_soft_) {
+                    decoder_soft_.reset();  // 重置解码器
+                }
+                if (puller_) {
+                    puller_.reset();  // 重置拉流器
+                    puller_ = PullFramer::CreateShared();  // 创建新实例
+                    
+                    // 重新设置回调函数和上下文（关键：修复重连后无法获取帧的问题）
+                    app_ctx_.puller = static_cast<void*>(&puller_);
+                    app_ctx_.decoder_ffmpeg = static_cast<void*>(&decoder_soft_);
+                    puller_->setOnGetFrame(onGetFrame, static_cast<void*>(&app_ctx_));
+                }
+
+                // 清理帧缓冲区
+                clear_frame_buffers(this);
 
                 // 等待一段时间再重连
                 std::this_thread::sleep_for(std::chrono::milliseconds(
