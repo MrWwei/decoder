@@ -10,7 +10,8 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--allow-shlib-undefine
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++11 -Wall -fPIC -O0 -Wfatal-errors -pthread -w -g")
 
 
-set(ThirdParty $ENV{THIRD_PARTY})
+# set(ThirdParty $ENV{THIRD_PARTY})
+set(ThirdParty "/work/ThirdParty")
 
 if (CMAKE_C_COMPILER MATCHES "aarch64")
   set(LIB_ARCH aarch64)
@@ -22,15 +23,15 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/include/utils)
 # opencv
 add_library(opencv_lib SHARED IMPORTED)
-set_target_properties( opencv_lib PROPERTIES IMPORTED_LOCATION ${ThirdParty}/opencv-4.5.4_video/build/install/lib/libopencv_world.so )
-include_directories(${ThirdParty}/opencv-4.5.4_video/build/install/include/opencv4)
+set_target_properties( opencv_lib PROPERTIES IMPORTED_LOCATION ${ThirdParty}/opencv-4.5.4_video/build2004/install/lib/libopencv_world.so )
+include_directories(${ThirdParty}/opencv-4.5.4_video/build2004/install/include/opencv4)
 #rga
 # set(RGA_LIB ${ThirdParty}/librga/libs/Linux/gcc-aarch64/librga.so)
 # include_directories( ${ThirdParty}/librga/include)
 
 # 设置ffmpeg依赖库及头文件所在目录，并存进指定变量                                                                      
-set(ffmpeg_libs_DIR ${ThirdParty}/FFmpeg-n6.0.1/install/lib)                                                              
-set(ffmpeg_headers_DIR ${ThirdParty}/FFmpeg-n6.0.1/install/include)                                                       
+set(ffmpeg_libs_DIR ${ThirdParty}/FFmpeg-n6.0.1/install2004/lib)                                                              
+set(ffmpeg_headers_DIR ${ThirdParty}/FFmpeg-n6.0.1/install2004/include)                                                       
 #对于find_package找不到的外部依赖库，可以用add_library添加                                                              
 # SHARED表示添加的是动态库                                                                                              
 # IMPORTED表示是引入已经存在的动态库                                                                                    
@@ -54,7 +55,7 @@ include_directories( ${ffmpeg_headers_DIR} )
 link_directories(${ffmpeg_libs_DIR})
 
 # zlmediakit
-set(ZLMEDIAKIT_PATH ${ThirdParty}/ZLMediaKit/install)
+set(ZLMEDIAKIT_PATH ${ThirdParty}/ZLMediaKit/install2004)
 include_directories(${ZLMEDIAKIT_PATH}/include)
 set(ZLMEDIAKIT_LIBS ${ZLMEDIAKIT_PATH}/lib/libmk_api.so)
 
